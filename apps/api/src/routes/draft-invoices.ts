@@ -3,6 +3,7 @@ import type { Customer, DraftInvoice } from "@invoice/shared";
 import { DocumentType, PaymentMethod, getDocumentTypeLabel } from "@invoice/shared";
 import { createCreditNote, createReturnNote, createDraftInvoice, getInvoiceForExport, issueDraftInvoice, listCustomers, listDraftInvoices, listIssuedInvoices } from "../data/prisma-store.js";
 import { buildInvoiceHtml } from "../lib/invoice-html.js";
+import { prisma } from "@invoice/db";
 import puppeteerCore, { type Browser } from "puppeteer-core";
 import chromium from "@sparticuz/chromium";
 
@@ -336,5 +337,45 @@ export async function registerDraftInvoiceRoutes(app: FastifyInstance) {
 
       throw error;
     }
+  });
+
+  // DELETE draft invoice
+  app.delete<{ Params: InvoiceParams }>("/v1/invoices/drafts/:id", async (request, reply) => {
+    const userId = getUserId(request);
+    const { id } = request.params;
+    const ctx = await (prisma.business.findFirst({ where: { owner: { id: userId } }, select: { id: true } }));
+    if (!ctx) return reply.code(404).send({ message: "עסק לא נמצא" });
+
+    const invoice = await prisma.invoice.findFirst({
+      where: { id, businessId: ctx.id, status: "DRAFT" }
+    });
+    if (!invoice) return reply.code(404).send({ message: "טיוטה לא נמצאה" });
+
+    await prisma.invoiceLine.deleteMany({ where: { invoiceId: id } });
+    await prisma.invoice.delete({ where: { id } });
+    return reply.code(204).send();
+  });
+
+  // POST mark issued invoice as fully paid
+  app.post<{ Params: InvoiceParams }>("/v1/invoices/:id/mark-paid", async (request, reply) => {
+    const userId = getUserId(request);
+    const { id } = request.params;
+    const ctx = await (prisma.business.findFirst({ where: { owner: { id: userId } }, select: { id: true } }));
+    if (!ctx) return reply.code(404).send({ message: "עסק לא נמצא" });
+
+    const invoice = await prisma.invoice.findFirst({
+      where: { id, businessId: ctx.id, status: { in: ["ISSUED", "PARTIALLY_PAID"] } }
+    });
+    if (!invoice) return reply.code(404).send({ message: "המסמך לא נמצא או שכבר שולם" });
+
+    const updated = await prisma.invoice.update({
+      where: { id },
+      data: {
+        paidAmount: invoice.totalAmount,
+        balanceDue: 0,
+        status: "PAID"
+      }
+    });
+    return reply.send({ id: updated.id, status: updated.status, balanceDue: 0 });
   });
 }

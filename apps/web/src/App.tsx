@@ -323,6 +323,9 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
   const [editingCustomerId, setEditingCustomerId] = useState<string | null>(null);
   const [expandedCustomerIds, setExpandedCustomerIds] = useState<Set<string>>(new Set());
   const [issuedSearch, setIssuedSearch] = useState("");
+  const [draftSearch, setDraftSearch] = useState("");
+  const [deletingDraftId, setDeletingDraftId] = useState<string | null>(null);
+  const [markingPaidId, setMarkingPaidId] = useState<string | null>(null);
   const [issuedCustomerFilter, setIssuedCustomerFilter] = useState("");
   const [issuedFromDate, setIssuedFromDate] = useState("");
   const [issuedToDate, setIssuedToDate] = useState("");
@@ -382,10 +385,19 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
   const totals = useMemo(() => calculateDraftInvoice(invoiceForm.lines), [invoiceForm.lines]);
   const selectedDocumentLabel = getTabLabel(selectedTab);
 
-  const filteredDraftInvoices = useMemo(
-    () => draftInvoices.filter((inv) => inv.documentType === selectedDocumentType),
-    [draftInvoices, selectedDocumentType]
-  );
+  const filteredDraftInvoices = useMemo(() => {
+    const search = draftSearch.trim().toLowerCase();
+    return draftInvoices.filter((inv) => {
+      if (inv.documentType !== selectedDocumentType) return false;
+      if (!search) return true;
+      const customer = customers.find((c) => c.id === inv.customerId);
+      return (
+        customer?.displayNameHe.toLowerCase().includes(search) ||
+        customer?.taxId?.includes(search) ||
+        (inv.notesHe ?? "").toLowerCase().includes(search)
+      );
+    });
+  }, [draftInvoices, selectedDocumentType, draftSearch, customers]);
 
   const filteredCustomers = useMemo(
     () =>
@@ -816,7 +828,10 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
       await response.json();
       setInvoiceForm((current) => ({
         ...current,
+        customerId: "",
         documentType: selectedDocumentType,
+        issueDate: today,
+        dueDate: today,
         notesHe: "",
         lines: [{ ...emptyInvoiceLine, vatRate: isPtur ? 0 : 17 }]
       }));
@@ -1057,6 +1072,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
   }
 
   async function handleIssueInvoice(invoiceId: string) {
+    if (!await confirmAction("האם להנפיק את המסמך? פעולה זו בלתי הפיכה.")) return;
     setIssuingInvoiceId(invoiceId);
     setError(null);
 
@@ -1081,6 +1097,50 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
 
   function openPrintableInvoice(invoiceId: string) {
     window.open(`${API_URL}/v1/invoices/${invoiceId}/export-html`, "_blank", "noopener,noreferrer");
+  }
+
+  async function handleDeleteDraft(invoiceId: string) {
+    if (!await confirmAction("האם למחוק את הטיוטה? לא ניתן לשחזרה.")) return;
+    setDeletingDraftId(invoiceId);
+    setError(null);
+    try {
+      const response = await fetch(`${API_URL}/v1/invoices/drafts/${invoiceId}`, {
+        method: "DELETE",
+        credentials: "include"
+      });
+      if (!response.ok) {
+        const payload = (await response.json()) as { message?: string };
+        throw new Error(payload.message ?? "מחיקת הטיוטה נכשלה");
+      }
+      await loadData();
+      toast("הטיוטה נמחקה", "success");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "מחיקת הטיוטה נכשלה");
+    } finally {
+      setDeletingDraftId(null);
+    }
+  }
+
+  async function handleMarkPaid(invoiceId: string) {
+    if (!await confirmAction("לסמן את המסמך כשולם במלואו?")) return;
+    setMarkingPaidId(invoiceId);
+    setError(null);
+    try {
+      const response = await fetch(`${API_URL}/v1/invoices/${invoiceId}/mark-paid`, {
+        method: "POST",
+        credentials: "include"
+      });
+      if (!response.ok) {
+        const payload = (await response.json()) as { message?: string };
+        throw new Error(payload.message ?? "סימון כשולם נכשל");
+      }
+      await loadData();
+      toast("המסמך סומן כשולם", "success");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "סימון כשולם נכשל");
+    } finally {
+      setMarkingPaidId(null);
+    }
   }
 
   async function shareViaWhatsApp(invoiceId: string) {
@@ -2619,12 +2679,21 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
             )}
 
             <Panel title="טיוטות אחרונות" description="תצוגה תפעולית מהירה של המסמכים שטרם הונפקו.">
-              <div className="max-h-[28rem] space-y-3 overflow-y-auto">
+              <div className="space-y-3">
+                <input
+                  className="input w-full"
+                  value={draftSearch}
+                  onChange={(e) => setDraftSearch(e.target.value)}
+                  placeholder="חיפוש לפי שם לקוח..."
+                  inputMode="search"
+                />
+                <div className="max-h-[24rem] space-y-3 overflow-y-auto">
                 {loading ? <EmptyState text="טוען טיוטות..." /> : null}
-                {!loading && filteredDraftInvoices.length === 0 ? <EmptyState text={`עדיין אין טיוטות ${selectedDocumentLabel}. צרו את הטיוטה הראשונה.`} /> : null}
+                {!loading && filteredDraftInvoices.length === 0 ? <EmptyState text={draftSearch ? "לא נמצאו טיוטות מתאימות לחיפוש." : `עדיין אין טיוטות ${selectedDocumentLabel}. צרו את הטיוטה הראשונה.`} /> : null}
                 {filteredDraftInvoices.map((invoice) => {
                   const customer = customers.find((item) => item.id === invoice.customerId);
                   const isIssuing = issuingInvoiceId === invoice.id;
+                  const isDeleting = deletingDraftId === invoice.id;
 
                   return (
                     <article key={invoice.id} className="rounded-xl border border-slate-200 p-3">
@@ -2645,7 +2714,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                         <button
                           className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-60"
                           onClick={() => handleIssueInvoice(invoice.id)}
-                          disabled={isIssuing}
+                          disabled={isIssuing || isDeleting}
                         >
                           {isIssuing ? "מנפיק..." : "הנפקה"}
                         </button>
@@ -2655,10 +2724,18 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                         >
                           תצוגת הדפסה
                         </button>
+                        <button
+                          className="rounded-xl border border-rose-200 px-3 py-2 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-60"
+                          onClick={() => handleDeleteDraft(invoice.id)}
+                          disabled={isIssuing || isDeleting}
+                        >
+                          {isDeleting ? "מוחק..." : "מחיקה"}
+                        </button>
                       </div>
                     </article>
                   );
                 })}
+                </div>
               </div>
             </Panel>
 
@@ -2808,6 +2885,18 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                           >
                             <FileX className="h-3.5 w-3.5" />
                             זיכוי
+                          </button>
+                        ) : null}
+                        {invoice.status !== DocumentStatus.CANCELLED &&
+                          invoice.status !== DocumentStatus.PAID &&
+                          invoice.documentType !== DocumentType.CREDIT_NOTE &&
+                          invoice.documentType !== DocumentType.RETURN_NOTE ? (
+                          <button
+                            className="flex items-center gap-1.5 rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
+                            onClick={() => handleMarkPaid(invoice.id)}
+                            disabled={markingPaidId === invoice.id}
+                          >
+                            {markingPaidId === invoice.id ? "מעדכן..." : "שולם"}
                           </button>
                         ) : null}
                       </div>
