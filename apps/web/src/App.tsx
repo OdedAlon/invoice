@@ -327,6 +327,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
   const [deletingDraftId, setDeletingDraftId] = useState<string | null>(null);
   const [markingPaidId, setMarkingPaidId] = useState<string | null>(null);
   const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
+  const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
   const [issuedCustomerFilter, setIssuedCustomerFilter] = useState("");
   const [issuedFromDate, setIssuedFromDate] = useState("");
   const [issuedToDate, setIssuedToDate] = useState("");
@@ -1268,6 +1269,27 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
       setError(e instanceof Error ? e.message : "עדכון הטיוטה נכשל");
     } finally {
       setSavingInvoice(false);
+    }
+  }
+
+  async function handleDuplicate(invoiceId: string) {
+    setDuplicatingId(invoiceId);
+    setError(null);
+    try {
+      const response = await fetch(`${API_URL}/v1/invoices/${invoiceId}/duplicate`, {
+        method: "POST",
+        credentials: "include"
+      });
+      if (!response.ok) {
+        const payload = (await response.json()) as { message?: string };
+        throw new Error(payload.message ?? "שכפול המסמך נכשל");
+      }
+      await loadData();
+      toast("טיוטה חדשה נוצרה מהמסמך", "success");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "שכפול המסמך נכשל");
+    } finally {
+      setDuplicatingId(null);
     }
   }
 
@@ -2881,6 +2903,13 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                           עריכה
                         </button>
                         <button
+                          className="rounded-xl border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                          onClick={() => handleDuplicate(invoice.id)}
+                          disabled={duplicatingId === invoice.id}
+                        >
+                          {duplicatingId === invoice.id ? "משכפל..." : "שכפל"}
+                        </button>
+                        <button
                           className="rounded-xl border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
                           onClick={() => openPrintableInvoice(invoice.id)}
                         >
@@ -3025,6 +3054,13 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                         >
                           <Printer className="h-3.5 w-3.5" />
                           הדפסה
+                        </button>
+                        <button
+                          className="flex items-center gap-1.5 rounded-xl border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                          onClick={() => handleDuplicate(invoice.id)}
+                          disabled={duplicatingId === invoice.id}
+                        >
+                          {duplicatingId === invoice.id ? "משכפל..." : "שכפל"}
                         </button>
                         <button
                           className="flex items-center gap-1.5 rounded-xl border border-blue-300 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700 hover:bg-blue-100"

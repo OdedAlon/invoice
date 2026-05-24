@@ -439,4 +439,41 @@ export async function registerDraftInvoiceRoutes(app: FastifyInstance) {
 
     return reply.send({ id, updated: true });
   });
+
+  // POST duplicate any invoice (draft or issued) → new draft with today's date
+  app.post<{ Params: InvoiceParams }>("/v1/invoices/:id/duplicate", async (request, reply) => {
+    const userId = getUserId(request);
+    const { id } = request.params;
+
+    const ctx = await prisma.business.findFirst({ where: { owner: { id: userId } }, select: { id: true } });
+    if (!ctx) return reply.code(404).send({ message: "עסק לא נמצא" });
+
+    const source = await prisma.invoice.findFirst({
+      where: { id, businessId: ctx.id },
+      include: { lines: true }
+    });
+    if (!source) return reply.code(404).send({ message: "המסמך לא נמצא" });
+
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const draft = await createDraftInvoice(userId, {
+      customerId: source.customerId,
+      documentType: source.documentType as any,
+      issueDate: todayStr,
+      dueDate: todayStr,
+      notesHe: source.notesHe ?? undefined,
+      payment: source.paymentMethod
+        ? { method: source.paymentMethod as any, details: source.paymentDetails as any }
+        : undefined,
+      lines: source.lines
+        .sort((a: { lineNo: number }, b: { lineNo: number }) => a.lineNo - b.lineNo)
+        .map((l: { descriptionHe: string; quantity: unknown; unitPrice: unknown; vatRate: unknown }) => ({
+          descriptionHe: l.descriptionHe,
+          quantity: Number(l.quantity),
+          unitPrice: Number(l.unitPrice),
+          vatRate: Number(l.vatRate)
+        }))
+    });
+
+    return reply.code(201).send(draft);
+  });
 }
