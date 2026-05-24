@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "packageManager": "pnpm@9.12.2",
   "scripts": {
-    "dev": "pnpm --filter @invoice/db run build && pnpm --filter @invoice/shared run build && turbo run dev",
+    "dev": "pnpm --filter @invoice/shared run build && turbo run dev",
+    "dev:fresh": "pnpm --filter @invoice/db run build && pnpm --filter @invoice/shared run build && turbo run dev",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "lint": "turbo run lint",
