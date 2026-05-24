@@ -326,6 +326,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
   const [draftSearch, setDraftSearch] = useState("");
   const [deletingDraftId, setDeletingDraftId] = useState<string | null>(null);
   const [markingPaidId, setMarkingPaidId] = useState<string | null>(null);
+  const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
   const [issuedCustomerFilter, setIssuedCustomerFilter] = useState("");
   const [issuedFromDate, setIssuedFromDate] = useState("");
   const [issuedToDate, setIssuedToDate] = useState("");
@@ -356,6 +357,19 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
     localStorage.setItem("theme", darkMode ? "dark" : "light");
   }, [darkMode]);
 
+  // ── Ctrl+S shortcut — submit the active invoice form ─────────
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+        e.preventDefault();
+        const form = document.getElementById("invoice-form-panel")?.querySelector("form");
+        if (form) form.requestSubmit();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   // ── Toasts + dialogs ─────────────────────────────────────────
   type Toast = { id: number; message: string; type: "info" | "success" | "error" };
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -384,6 +398,30 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
     selectedDocumentType === DocumentType.INVOICE_RECEIPT;
   const totals = useMemo(() => calculateDraftInvoice(invoiceForm.lines), [invoiceForm.lines]);
   const selectedDocumentLabel = getTabLabel(selectedTab);
+
+  // Dashboard KPIs — current month
+  const dashboardStats = useMemo(() => {
+    const monthPrefix = today.slice(0, 7); // "YYYY-MM"
+    const relevant = issuedInvoices.filter(
+      (inv) =>
+        inv.documentType === DocumentType.TAX_INVOICE ||
+        inv.documentType === DocumentType.INVOICE_RECEIPT ||
+        inv.documentType === DocumentType.RECEIPT
+    );
+    const thisMonth = relevant.filter((inv) => inv.issueDate.startsWith(monthPrefix));
+    const invoiced = thisMonth.reduce((s, inv) => s + inv.totalAmount, 0);
+    const collected = thisMonth.reduce((s, inv) => s + (inv.totalAmount - inv.balanceDue), 0);
+    const outstanding = relevant
+      .filter((inv) => inv.status === DocumentStatus.ISSUED || inv.status === DocumentStatus.PARTIALLY_PAID)
+      .reduce((s, inv) => s + inv.balanceDue, 0);
+    const overdue = relevant.filter(
+      (inv) =>
+        (inv.status === DocumentStatus.ISSUED || inv.status === DocumentStatus.PARTIALLY_PAID) &&
+        inv.dueDate != null &&
+        inv.dueDate < today
+    ).length;
+    return { invoiced, collected, outstanding, overdue };
+  }, [issuedInvoices, today]);
 
   const filteredDraftInvoices = useMemo(() => {
     const search = draftSearch.trim().toLowerCase();
@@ -1072,7 +1110,12 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
   }
 
   async function handleIssueInvoice(invoiceId: string) {
-    if (!await confirmAction("האם להנפיק את המסמך? פעולה זו בלתי הפיכה.")) return;
+    const draft = draftInvoices.find((d) => d.id === invoiceId);
+    const customer = customers.find((c) => c.id === draft?.customerId);
+    const totalStr = draft ? currencyFormatter.format(draft.totalAmount) : "";
+    const customerStr = customer?.displayNameHe ?? "";
+    const confirmMsg = `האם להנפיק את המסמך?${customerStr ? `\nלקוח: ${customerStr}` : ""}${totalStr ? ` • סה״כ ${totalStr}` : ""}\n\nפעולה זו בלתי הפיכה.`;
+    if (!await confirmAction(confirmMsg)) return;
     setIssuingInvoiceId(invoiceId);
     setError(null);
 
@@ -1087,7 +1130,9 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
         throw new Error(payload.message ?? "הנפקת המסמך נכשלה");
       }
 
+      const issued = (await response.json()) as { sequenceNumber?: number };
       await loadData();
+      toast(`המסמך הונפק בהצלחה${issued.sequenceNumber ? ` — מספר ${issued.sequenceNumber}` : ""}`, "success");
     } catch (issueError) {
       setError(issueError instanceof Error ? issueError.message : "הנפקת המסמך נכשלה");
     } finally {
@@ -1140,6 +1185,89 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
       setError(e instanceof Error ? e.message : "סימון כשולם נכשל");
     } finally {
       setMarkingPaidId(null);
+    }
+  }
+
+  function handleEditDraft(invoice: DraftInvoice) {
+    setEditingDraftId(invoice.id);
+    setSelectedTab(invoice.documentType as WorkspaceTab);
+    setInvoiceForm({
+      customerId: invoice.customerId,
+      documentType: invoice.documentType,
+      issueDate: invoice.issueDate,
+      dueDate: invoice.dueDate ?? today,
+      notesHe: invoice.notesHe ?? "",
+      lines: invoice.lines.map((l) => ({
+        descriptionHe: l.descriptionHe,
+        quantity: l.quantity,
+        unitPrice: l.unitPrice,
+        vatRate: l.vatRate
+      }))
+    });
+    if (invoice.payment) {
+      const det = (invoice.payment.details ?? {}) as Record<string, unknown>;
+      setReceiptPaymentForm({
+        ...emptyReceiptPaymentForm,
+        method: invoice.payment.method,
+        checkNumber: String(det.checkNumber ?? ""),
+        checkDueDate: String(det.checkDueDate ?? ""),
+        bankName: String(det.bankName ?? ""),
+        transferReference: String(det.transferReference ?? ""),
+        otherDescription: String(det.otherDescription ?? "")
+      });
+    }
+    // Scroll the form into view
+    document.getElementById("invoice-form-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  async function handleUpdateDraft(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editingDraftId) return;
+    setSavingInvoice(true);
+    setError(null);
+    try {
+      const isReceiptLike =
+        selectedDocumentType === DocumentType.RECEIPT ||
+        selectedDocumentType === DocumentType.INVOICE_RECEIPT;
+
+      if (isReceiptLike && !validateReceiptPayment(receiptPaymentForm)) {
+        throw new Error("יש להשלים פרטי תשלום תקינים עבור קבלה");
+      }
+
+      const payload: CreateDraftInvoiceInput = {
+        ...invoiceForm,
+        documentType: selectedDocumentType,
+        payment: isReceiptLike ? buildReceiptPaymentPayload(receiptPaymentForm) : undefined
+      };
+
+      const response = await fetch(`${API_URL}/v1/invoices/drafts/${editingDraftId}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        const errBody = (await response.json()) as { message?: string };
+        throw new Error(errBody.message ?? "עדכון הטיוטה נכשל");
+      }
+
+      setEditingDraftId(null);
+      setInvoiceForm((current) => ({
+        ...current,
+        customerId: "",
+        issueDate: today,
+        dueDate: today,
+        notesHe: "",
+        lines: [{ ...emptyInvoiceLine, vatRate: isPtur ? 0 : 17 }]
+      }));
+      setReceiptPaymentForm(emptyReceiptPaymentForm);
+      await loadData();
+      toast("הטיוטה עודכנה בהצלחה", "success");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "עדכון הטיוטה נכשל");
+    } finally {
+      setSavingInvoice(false);
     }
   }
 
@@ -1444,7 +1572,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
         </header>
 
         {/* Document Type Tabs */}
-        <nav className="mb-6 flex gap-0 overflow-x-auto border-b border-slate-200 bg-white px-4 py-0 dark:border-slate-700 dark:bg-slate-900 sm:px-6">
+        <nav className="sticky top-0 z-20 mb-6 flex gap-0 overflow-x-auto border-b border-slate-200 bg-white px-4 py-0 dark:border-slate-700 dark:bg-slate-900 sm:px-6">
           {(isPtur
             ? [DocumentType.RECEIPT, DocumentType.PROFORMA, DocumentType.RETURN_NOTE, "REPORTS"] as WorkspaceTab[]
             : [DocumentType.TAX_INVOICE, DocumentType.RECEIPT, DocumentType.INVOICE_RECEIPT, DocumentType.PROFORMA, DocumentType.RETURN_NOTE, "QUOTE", "REPORTS"] as WorkspaceTab[]
@@ -1954,6 +2082,28 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
           <div className="mb-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>
         ) : null}
 
+        {/* Dashboard KPI cards */}
+        {!loading && issuedInvoices.length > 0 ? (
+          <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+              <p className="text-xs text-slate-500">חויב החודש</p>
+              <p className="mt-1 text-lg font-semibold text-slate-900 dark:text-slate-100">{currencyFormatter.format(dashboardStats.invoiced)}</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+              <p className="text-xs text-slate-500">נגבה החודש</p>
+              <p className="mt-1 text-lg font-semibold text-emerald-600">{currencyFormatter.format(dashboardStats.collected)}</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+              <p className="text-xs text-slate-500">יתרה פתוחה</p>
+              <p className="mt-1 text-lg font-semibold text-amber-600">{currencyFormatter.format(dashboardStats.outstanding)}</p>
+            </div>
+            <div className={`rounded-xl border p-4 ${dashboardStats.overdue > 0 ? "border-rose-200 bg-rose-50 dark:border-rose-900 dark:bg-rose-950" : "border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900"}`}>
+              <p className="text-xs text-slate-500">באיחור</p>
+              <p className={`mt-1 text-lg font-semibold ${dashboardStats.overdue > 0 ? "text-rose-600" : "text-slate-900 dark:text-slate-100"}`}>{dashboardStats.overdue} מסמכים</p>
+            </div>
+          </div>
+        ) : null}
+
         <section className="grid min-w-0 gap-5 xl:grid-cols-[1.1fr_1.4fr]">
           <div className="order-last min-w-0 space-y-6 xl:order-first">
             <Panel title={editingCustomerId ? "עריכת לקוח" : "פתיחת לקוח חדש"} description={editingCustomerId ? "עדכן פרטי לקוח קיים." : "הזנה מהירה בעברית, עם שדות מינימליים להתחלה מהירה."} collapsible>
@@ -2349,8 +2499,14 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                 </form>
               </Panel>
             ) : (
-              <Panel title={`יצירת טיוטת ${selectedDocumentLabel}`} description="מילוי זריז עם חישוב סכומים בזמן אמת.">
-              <form className="grid gap-5" onSubmit={handleInvoiceSubmit}>
+              <Panel title={editingDraftId ? `עריכת טיוטת ${selectedDocumentLabel}` : `יצירת טיוטת ${selectedDocumentLabel}`} description={editingDraftId ? "ערכו את הטיוטה ושמרו את השינויים." : "מילוי זריז עם חישוב סכומים בזמן אמת."}>
+              {editingDraftId ? (
+                <div className="mb-3 flex items-center justify-between rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-700 border border-amber-200">
+                  <span>עורכים טיוטה קיימת</span>
+                  <button type="button" className="text-xs underline" onClick={() => { setEditingDraftId(null); setInvoiceForm((c) => ({ ...c, customerId: "", issueDate: today, dueDate: today, notesHe: "", lines: [{ ...emptyInvoiceLine, vatRate: isPtur ? 0 : 17 }] })); }}>ביטול עריכה</button>
+                </div>
+              ) : null}
+              <form id="invoice-form-panel" className="grid gap-5" onSubmit={editingDraftId ? handleUpdateDraft : handleInvoiceSubmit}>
                 <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-4">
                   <Field label="לקוח">
                     <select className="input" value={invoiceForm.customerId} onChange={(event) => updateInvoiceField("customerId", event.target.value)}>
@@ -2670,7 +2826,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                   <AmountTile label="סה״כ לתשלום" value={currencyFormatter.format(totals.totalAmount)} />
                   <div className="flex items-end justify-end">
                     <button className="w-full rounded-xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 transition hover:bg-slate-200 dark:bg-slate-200 dark:text-slate-900 dark:hover:bg-slate-300 disabled:opacity-60" disabled={savingInvoice || customers.length === 0}>
-                      {savingInvoice ? "שומר טיוטה..." : `שמירת טיוטת ${selectedDocumentLabel}`}
+                      {savingInvoice ? "שומר..." : editingDraftId ? `עדכון טיוטת ${selectedDocumentLabel}` : `שמירת טיוטת ${selectedDocumentLabel}`}
                     </button>
                   </div>
                 </div>
@@ -2710,13 +2866,19 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                         <span>יתרה לתשלום</span>
                         <strong className="text-base text-slate-900">{currencyFormatter.format(invoice.balanceDue)}</strong>
                       </div>
-                      <div className="mt-4 flex gap-2">
+                      <div className="mt-4 flex flex-wrap gap-2">
                         <button
                           className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-60"
                           onClick={() => handleIssueInvoice(invoice.id)}
                           disabled={isIssuing || isDeleting}
                         >
                           {isIssuing ? "מנפיק..." : "הנפקה"}
+                        </button>
+                        <button
+                          className="rounded-xl border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                          onClick={() => handleEditDraft(invoice)}
+                        >
+                          עריכה
                         </button>
                         <button
                           className="rounded-xl border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
@@ -2815,31 +2977,46 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                 ) : null}
                 {pagedIssuedInvoices.map((invoice) => {
                   const customer = customers.find((item) => item.id === invoice.customerId);
+                  const isOverdue =
+                    (invoice.status === DocumentStatus.ISSUED || invoice.status === DocumentStatus.PARTIALLY_PAID) &&
+                    invoice.dueDate != null &&
+                    invoice.dueDate < today;
+                  const badgeClass =
+                    invoice.status === DocumentStatus.CANCELLED ? "bg-slate-100 text-slate-600" :
+                    invoice.status === DocumentStatus.PAID ? "bg-emerald-100 text-emerald-700" :
+                    invoice.status === DocumentStatus.PARTIALLY_PAID ? "bg-orange-100 text-orange-700" :
+                    isOverdue ? "bg-rose-100 text-rose-700" :
+                    "bg-blue-100 text-blue-700";
+                  const badgeLabel =
+                    invoice.status === DocumentStatus.CANCELLED ? "בוטל" :
+                    invoice.status === DocumentStatus.PAID ? "שולם" :
+                    invoice.status === DocumentStatus.PARTIALLY_PAID ? "שולם חלקית" :
+                    isOverdue ? "באיחור" :
+                    "הונפק";
 
                   return (
-                    <article key={invoice.id} className="rounded-xl border border-slate-200 p-3">
+                    <article key={invoice.id} className={`rounded-xl border p-3 ${isOverdue ? "border-rose-200 bg-rose-50/30" : "border-slate-200"}`}>
                       <div className="flex items-center justify-between gap-3">
                         <div>
                           <h3 className="font-medium">{customer?.displayNameHe ?? "לקוח לא ידוע"}</h3>
                           <p className="mt-1 text-sm text-slate-500">
-                            {invoice.status === "ISSUED" ? `מס׳ ${invoice.sequenceNumber ?? "-"} • ` : ""}
+                            {invoice.sequenceNumber ? `מס׳ ${invoice.sequenceNumber} • ` : ""}
                             {formatDate(invoice.issueDate)} • {getDocumentTypeLabel(invoice.documentType)}
+                            {invoice.dueDate && invoice.status !== DocumentStatus.PAID && invoice.status !== DocumentStatus.CANCELLED ? ` • לתשלום: ${formatDate(invoice.dueDate)}` : ""}
                           </p>
                           {invoice.payment?.method ? (
                             <p className="mt-1 text-xs text-slate-500">אמצעי תשלום: {getPaymentMethodLabel(invoice.payment.method)}</p>
                           ) : null}
                         </div>
-                        <span className={`rounded-full px-3 py-1 text-xs font-medium ${
-                          invoice.status === DocumentStatus.CANCELLED
-                            ? "bg-red-100 text-red-700"
-                            : "bg-emerald-100 text-emerald-700"
-                        }`}>
-                          {invoice.status === DocumentStatus.CANCELLED ? "בוטל" : "הונפק"}
-                        </span>
+                        <span className={`rounded-full px-3 py-1 text-xs font-medium ${badgeClass}`}>{badgeLabel}</span>
                       </div>
                       <div className="mt-4 flex items-center justify-between text-sm text-slate-600">
-                        <span>סה״כ</span>
-                        <strong className="text-base text-slate-900">{currencyFormatter.format(invoice.totalAmount)}</strong>
+                        <span>{invoice.balanceDue > 0 && invoice.balanceDue < invoice.totalAmount ? "יתרה לתשלום" : "סה״כ"}</span>
+                        <strong className="text-base text-slate-900">
+                          {invoice.balanceDue > 0 && invoice.balanceDue < invoice.totalAmount
+                            ? `${currencyFormatter.format(invoice.balanceDue)} / ${currencyFormatter.format(invoice.totalAmount)}`
+                            : currencyFormatter.format(invoice.totalAmount)}
+                        </strong>
                       </div>
                       <div className="mt-4 flex flex-wrap gap-2">
                         <button

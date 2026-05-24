@@ -378,4 +378,65 @@ export async function registerDraftInvoiceRoutes(app: FastifyInstance) {
     });
     return reply.send({ id: updated.id, status: updated.status, balanceDue: 0 });
   });
+
+  // PATCH update a draft invoice
+  app.patch<{ Params: InvoiceParams; Body: CreateDraftInvoiceBody }>("/v1/invoices/drafts/:id", async (request, reply) => {
+    const userId = getUserId(request);
+    const { id } = request.params;
+    const body = request.body ?? {};
+
+    const ctx = await prisma.business.findFirst({ where: { owner: { id: userId } }, select: { id: true } });
+    if (!ctx) return reply.code(404).send({ message: "עסק לא נמצא" });
+
+    const existing = await prisma.invoice.findFirst({
+      where: { id, businessId: ctx.id, status: "DRAFT" }
+    });
+    if (!existing) return reply.code(404).send({ message: "טיוטה לא נמצאה" });
+
+    if (!body.customerId) return reply.code(400).send({ message: "יש לבחור לקוח" });
+    if (!body.issueDate) return reply.code(400).send({ message: "תאריך מסמך הוא שדה חובה" });
+    if (!Array.isArray(body.lines) || body.lines.length === 0) return reply.code(400).send({ message: "יש להזין לפחות שורת חיוב אחת" });
+
+    const { calculateDraftInvoice: calcInvoice } = await import("@invoice/shared");
+    const lines = body.lines.map((line) => ({
+      descriptionHe: (line.descriptionHe ?? "").trim(),
+      quantity: Number(line.quantity),
+      unitPrice: Number(line.unitPrice),
+      vatRate: Number(line.vatRate)
+    }));
+    const calc = calcInvoice(lines);
+
+    await prisma.$transaction(async (tx: typeof prisma) => {
+      await tx.invoiceLine.deleteMany({ where: { invoiceId: id } });
+      await tx.invoice.update({
+        where: { id },
+        data: {
+          customerId: body.customerId,
+          issueDate: new Date(body.issueDate!),
+          dueDate: body.dueDate ? new Date(body.dueDate) : null,
+          notesHe: body.notesHe ?? null,
+          paymentMethod: body.payment?.method ?? null,
+          paymentDetails: body.payment?.details ?? null,
+          subtotalAmount: calc.subtotalAmount,
+          vatAmount: calc.vatAmount,
+          totalAmount: calc.totalAmount,
+          balanceDue: calc.totalAmount,
+          lines: {
+            create: lines.map((line, idx) => ({
+              lineNo: idx + 1,
+              descriptionHe: line.descriptionHe,
+              quantity: line.quantity,
+              unitPrice: line.unitPrice,
+              vatRate: line.vatRate,
+              lineSubtotal: line.quantity * line.unitPrice,
+              lineVatAmount: line.quantity * line.unitPrice * (line.vatRate / 100),
+              lineTotal: line.quantity * line.unitPrice * (1 + line.vatRate / 100)
+            }))
+          }
+        }
+      });
+    });
+
+    return reply.send({ id, updated: true });
+  });
 }
