@@ -415,8 +415,10 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
     const outstanding = relevant
       .filter((inv) => inv.status === DocumentStatus.ISSUED || inv.status === DocumentStatus.PARTIALLY_PAID)
       .reduce((s, inv) => s + inv.balanceDue, 0);
+    const receiptTypes = [DocumentType.RECEIPT, DocumentType.INVOICE_RECEIPT];
     const overdue = relevant.filter(
       (inv) =>
+        !receiptTypes.includes(inv.documentType as DocumentType) &&
         (inv.status === DocumentStatus.ISSUED || inv.status === DocumentStatus.PARTIALLY_PAID) &&
         inv.dueDate != null &&
         inv.dueDate < today
@@ -3006,7 +3008,9 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                 ) : null}
                 {pagedIssuedInvoices.map((invoice) => {
                   const customer = customers.find((item) => item.id === invoice.customerId);
+                  const isReceiptType = invoice.documentType === DocumentType.RECEIPT || invoice.documentType === DocumentType.INVOICE_RECEIPT;
                   const isOverdue =
+                    !isReceiptType &&
                     (invoice.status === DocumentStatus.ISSUED || invoice.status === DocumentStatus.PARTIALLY_PAID) &&
                     invoice.dueDate != null &&
                     invoice.dueDate < today;
@@ -3103,7 +3107,9 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                         {invoice.status !== DocumentStatus.CANCELLED &&
                           invoice.status !== DocumentStatus.PAID &&
                           invoice.documentType !== DocumentType.CREDIT_NOTE &&
-                          invoice.documentType !== DocumentType.RETURN_NOTE ? (
+                          invoice.documentType !== DocumentType.RETURN_NOTE &&
+                          invoice.documentType !== DocumentType.RECEIPT &&
+                          invoice.documentType !== DocumentType.INVOICE_RECEIPT ? (
                           <button
                             className="flex items-center gap-1.5 rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
                             onClick={() => handleMarkPaid(invoice.id)}
