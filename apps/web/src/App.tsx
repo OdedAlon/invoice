@@ -400,32 +400,6 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
   const totals = useMemo(() => calculateDraftInvoice(invoiceForm.lines), [invoiceForm.lines]);
   const selectedDocumentLabel = getTabLabel(selectedTab);
 
-  // Dashboard KPIs — current month
-  const dashboardStats = useMemo(() => {
-    const monthPrefix = today.slice(0, 7); // "YYYY-MM"
-    const relevant = issuedInvoices.filter(
-      (inv) =>
-        inv.documentType === DocumentType.TAX_INVOICE ||
-        inv.documentType === DocumentType.INVOICE_RECEIPT ||
-        inv.documentType === DocumentType.RECEIPT
-    );
-    const thisMonth = relevant.filter((inv) => inv.issueDate.startsWith(monthPrefix));
-    const invoiced = thisMonth.reduce((s, inv) => s + inv.totalAmount, 0);
-    const collected = thisMonth.reduce((s, inv) => s + (inv.totalAmount - inv.balanceDue), 0);
-    const outstanding = relevant
-      .filter((inv) => inv.status === DocumentStatus.ISSUED || inv.status === DocumentStatus.PARTIALLY_PAID)
-      .reduce((s, inv) => s + inv.balanceDue, 0);
-    const receiptTypes = [DocumentType.RECEIPT, DocumentType.INVOICE_RECEIPT];
-    const overdue = relevant.filter(
-      (inv) =>
-        !receiptTypes.includes(inv.documentType as DocumentType) &&
-        (inv.status === DocumentStatus.ISSUED || inv.status === DocumentStatus.PARTIALLY_PAID) &&
-        inv.dueDate != null &&
-        inv.dueDate < today
-    ).length;
-    return { invoiced, collected, outstanding, overdue };
-  }, [issuedInvoices, today]);
-
   const filteredDraftInvoices = useMemo(() => {
     const search = draftSearch.trim().toLowerCase();
     return draftInvoices.filter((inv) => {
@@ -2106,27 +2080,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
           <div className="mb-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>
         ) : null}
 
-        {/* Dashboard KPI cards */}
-        {!loading && issuedInvoices.length > 0 ? (
-          <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
-              <p className="text-xs text-slate-500">חויב החודש</p>
-              <p className="mt-1 text-lg font-semibold text-slate-900 dark:text-slate-100">{currencyFormatter.format(dashboardStats.invoiced)}</p>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
-              <p className="text-xs text-slate-500">נגבה החודש</p>
-              <p className="mt-1 text-lg font-semibold text-emerald-600">{currencyFormatter.format(dashboardStats.collected)}</p>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
-              <p className="text-xs text-slate-500">יתרה פתוחה</p>
-              <p className="mt-1 text-lg font-semibold text-amber-600">{currencyFormatter.format(dashboardStats.outstanding)}</p>
-            </div>
-            <div className={`rounded-xl border p-4 ${dashboardStats.overdue > 0 ? "border-rose-200 bg-rose-50 dark:border-rose-900 dark:bg-rose-950" : "border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900"}`}>
-              <p className="text-xs text-slate-500">באיחור</p>
-              <p className={`mt-1 text-lg font-semibold ${dashboardStats.overdue > 0 ? "text-rose-600" : "text-slate-900 dark:text-slate-100"}`}>{dashboardStats.overdue} מסמכים</p>
-            </div>
-          </div>
-        ) : null}
+
 
         <section className="grid min-w-0 gap-5 xl:grid-cols-[1.1fr_1.4fr]">
           <div className="order-last min-w-0 space-y-6 xl:order-first">
