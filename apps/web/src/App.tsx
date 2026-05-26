@@ -2948,7 +2948,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
               </Panel>
             )}
 
-            <Panel title="טיוטות אחרונות" description="תצוגה תפעולית מהירה של המסמכים שטרם הונפקו.">
+            <Panel id="draft-panel" title="טיוטות אחרונות" description="תצוגה תפעולית מהירה של המסמכים שטרם הונפקו.">
               <div className="space-y-3">
                 <div className="flex gap-2">
                   <input
@@ -3058,7 +3058,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
               </div>
             </Panel>
 
-            <Panel title={`מסמכי ${selectedDocumentLabel} שהונפקו`} description="מסמכים סופיים עם מספר רץ ותצוגת הדפסה.">
+            <Panel id="issued-panel" title={`מסמכי ${selectedDocumentLabel} שהונפקו`} description="מסמכים סופיים עם מספר רץ ותצוגת הדפסה.">
               <div className="space-y-3">
                 <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 xl:grid-cols-5">
                   <Field label="חיפוש חופשי">
@@ -3571,6 +3571,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                             setSelectedTab(inv.documentType as WorkspaceTab);
                             setDraftSearch(cust?.displayNameHe ?? "");
                             setGlobalSearchOpen(false);
+                            setTimeout(() => document.getElementById("draft-panel")?.scrollIntoView({ behavior: "smooth", block: "start" }), 150);
                           }}
                         >
                           <FilePlus2 className="h-4 w-4 shrink-0 text-amber-500" />
@@ -3598,6 +3599,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                             setIssuedToDate("");
                             setIssuedPage(1);
                             setGlobalSearchOpen(false);
+                            setTimeout(() => document.getElementById("issued-panel")?.scrollIntoView({ behavior: "smooth", block: "start" }), 150);
                           }}
                         >
                           <ReceiptText className="h-4 w-4 shrink-0 text-emerald-500" />
@@ -3629,10 +3631,10 @@ function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string
   );
 }
 
-function Panel({ title, description, children, collapsible }: { title: string; description: string; children: React.ReactNode; collapsible?: boolean }) {
+function Panel({ title, description, children, collapsible, id }: { title: string; description: string; children: React.ReactNode; collapsible?: boolean; id?: string }) {
   const [open, setOpen] = useState(!collapsible);
   return (
-    <section className="rounded-[16px] bg-white p-3 shadow-sm shadow-slate-200 dark:bg-slate-800 dark:shadow-slate-950 sm:rounded-[24px] sm:p-5">
+    <section id={id} className="rounded-[16px] bg-white p-3 shadow-sm shadow-slate-200 dark:bg-slate-800 dark:shadow-slate-950 sm:rounded-[24px] sm:p-5">
       <div className={`flex items-start gap-2 ${open ? "mb-4" : ""}`}>
         <div className="rounded-xl bg-slate-100 p-2 text-slate-700 dark:bg-slate-700 dark:text-slate-300">
           <Building2 className="h-4 w-4" />
