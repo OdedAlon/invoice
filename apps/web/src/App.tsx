@@ -3567,13 +3567,10 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                           key={inv.id}
                           className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-right hover:bg-slate-100 dark:hover:bg-slate-700"
                           onClick={() => {
+                            const cust = customers.find((x) => x.id === inv.customerId);
                             setSelectedTab(inv.documentType as WorkspaceTab);
-                            setDraftSearch("");
+                            setDraftSearch(cust?.displayNameHe ?? "");
                             setGlobalSearchOpen(false);
-                            setTimeout(() => {
-                              const el = document.querySelector(`[data-draft-id="${inv.id}"]`);
-                              el?.scrollIntoView({ behavior: "smooth", block: "center" });
-                            }, 200);
                           }}
                         >
                           <FilePlus2 className="h-4 w-4 shrink-0 text-amber-500" />
@@ -3596,6 +3593,10 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                           onClick={() => {
                             setSelectedTab(inv.documentType as WorkspaceTab);
                             setIssuedSearch(String(inv.sequenceNumber ?? "") || (c?.displayNameHe ?? ""));
+                            setIssuedCustomerFilter("");
+                            setIssuedFromDate("");
+                            setIssuedToDate("");
+                            setIssuedPage(1);
                             setGlobalSearchOpen(false);
                           }}
                         >
