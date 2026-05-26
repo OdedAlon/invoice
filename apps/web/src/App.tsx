@@ -359,13 +359,31 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
     localStorage.setItem("theme", darkMode ? "dark" : "light");
   }, [darkMode]);
 
+  // Global search
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+  const [globalSearchQuery, setGlobalSearchQuery] = useState("");
+
+  // Bulk issue
+  const [bulkSelectMode, setBulkSelectMode] = useState(false);
+  const [selectedDraftIds, setSelectedDraftIds] = useState<Set<string>>(new Set());
+  const [bulkIssuing, setBulkIssuing] = useState(false);
+
   // ── Ctrl+S shortcut — submit the active invoice form ─────────
+  // ── Ctrl+K — open global search ──────────────────────────────
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if ((e.ctrlKey || e.metaKey) && e.key === "s") {
         e.preventDefault();
         const form = document.getElementById("invoice-form-panel")?.querySelector("form");
         if (form) form.requestSubmit();
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "k") {
+        e.preventDefault();
+        setGlobalSearchOpen((prev) => !prev);
+        setGlobalSearchQuery("");
+      }
+      if (e.key === "Escape") {
+        setGlobalSearchOpen(false);
       }
     }
     window.addEventListener("keydown", onKeyDown);
@@ -518,6 +536,29 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
     () => filteredIssuedInvoices.slice((issuedCurrentPage - 1) * ISSUED_PAGE_SIZE, issuedCurrentPage * ISSUED_PAGE_SIZE),
     [filteredIssuedInvoices, issuedCurrentPage]
   );
+
+  const globalSearchResults = useMemo(() => {
+    const q = globalSearchQuery.trim().toLowerCase();
+    if (!q) return { customers: [], drafts: [], issued: [] };
+    const matchCustomers = customers.filter((c) =>
+      c.displayNameHe.toLowerCase().includes(q) ||
+      (c.taxId ?? "").includes(q) ||
+      (c.phone ?? "").includes(q) ||
+      (c.email ?? "").toLowerCase().includes(q)
+    ).slice(0, 5);
+    const matchDrafts = draftInvoices.filter((inv) => {
+      const cust = customers.find((c) => c.id === inv.customerId);
+      return (cust?.displayNameHe ?? "").toLowerCase().includes(q) ||
+        (inv.notesHe ?? "").toLowerCase().includes(q);
+    }).slice(0, 5);
+    const matchIssued = [...issuedInvoices, ...demoDocs].filter((inv) => {
+      const cust = customers.find((c) => c.id === inv.customerId);
+      return (cust?.displayNameHe ?? "").toLowerCase().includes(q) ||
+        String(inv.sequenceNumber ?? "").toLowerCase().includes(q) ||
+        (inv.notesHe ?? "").toLowerCase().includes(q);
+    }).slice(0, 5);
+    return { customers: matchCustomers, drafts: matchDrafts, issued: matchIssued };
+  }, [globalSearchQuery, customers, draftInvoices, issuedInvoices, demoDocs]);
 
   const reportIncomeEntries = useMemo(
     () =>
@@ -1319,6 +1360,55 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
     }
   }
 
+  async function handleBulkIssue() {
+    const ids = Array.from(selectedDraftIds);
+    if (ids.length === 0) return;
+    if (!await confirmAction(`להנפיק ${ids.length} טיוטות? לא ניתן לבטל לאחר הנפקה.`)) return;
+    setBulkIssuing(true);
+    setError(null);
+    let issued = 0;
+    let failed = 0;
+    for (const id of ids) {
+      try {
+        const response = await fetch(`${API_URL}/v1/invoices/${id}/issue`, {
+          method: "POST",
+          credentials: "include"
+        });
+        if (response.ok) {
+          issued++;
+          setSelectedDraftIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
+        } else {
+          failed++;
+        }
+      } catch {
+        failed++;
+      }
+    }
+    await loadData();
+    setBulkIssuing(false);
+    setBulkSelectMode(false);
+    setSelectedDraftIds(new Set());
+    if (failed === 0) toast(`הונפקו ${issued} מסמכים בהצלחה`, "success");
+    else toast(`הונפקו ${issued}, נכשלו ${failed}`, "error");
+  }
+
+  async function handleExportData() {
+    try {
+      const response = await fetch(`${API_URL}/v1/export`, { credentials: "include" });
+      if (!response.ok) { toast("ייצוא נכשל", "error"); return; }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `invoice-backup-${today}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast("הנתונים יוצאו בהצלחה", "success");
+    } catch {
+      toast("שגיאת רשת — ייצוא נכשל", "error");
+    }
+  }
+
   async function shareViaWhatsApp(invoiceId: string) {
     let blob: Blob | null = null;
     let filename = `invoice-${invoiceId}.pdf`;
@@ -1608,6 +1698,14 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
             >
               <X className="h-4 w-4" />
               <span className="hidden text-sm font-medium sm:inline">יציאה</span>
+            </button>
+            <button
+              className="rounded-xl border border-white/20 p-2 text-white hover:bg-white/10"
+              onClick={() => { setGlobalSearchOpen(true); setGlobalSearchQuery(""); }}
+              aria-label="חיפוש גלובלי (Ctrl+K)"
+              title="חיפוש גלובלי (Ctrl+K)"
+            >
+              <Search className="h-4 w-4" />
             </button>
             <button
               className="rounded-xl border border-white/20 p-2 text-white hover:bg-white/10"
@@ -2865,13 +2963,35 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
 
             <Panel title="טיוטות אחרונות" description="תצוגה תפעולית מהירה של המסמכים שטרם הונפקו.">
               <div className="space-y-3">
-                <input
-                  className="input w-full"
-                  value={draftSearch}
-                  onChange={(e) => setDraftSearch(e.target.value)}
-                  placeholder="חיפוש לפי שם לקוח..."
-                  inputMode="search"
-                />
+                <div className="flex gap-2">
+                  <input
+                    className="input flex-1"
+                    value={draftSearch}
+                    onChange={(e) => setDraftSearch(e.target.value)}
+                    placeholder="חיפוש לפי שם לקוח..."
+                    inputMode="search"
+                  />
+                  {filteredDraftInvoices.length > 0 ? (
+                    <button
+                      className={`rounded-xl border px-3 py-2 text-xs font-medium transition ${bulkSelectMode ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700 hover:bg-slate-50"}`}
+                      onClick={() => { setBulkSelectMode((m) => !m); setSelectedDraftIds(new Set()); }}
+                    >
+                      {bulkSelectMode ? "ביטול" : "בחירה מרובה"}
+                    </button>
+                  ) : null}
+                </div>
+                {bulkSelectMode && selectedDraftIds.size > 0 ? (
+                  <div className="flex items-center justify-between rounded-xl bg-slate-900 px-4 py-3 text-white">
+                    <span className="text-sm font-medium">{selectedDraftIds.size} נבחרו</span>
+                    <button
+                      className="rounded-xl bg-white px-4 py-2 text-xs font-semibold text-slate-900 hover:bg-slate-100 disabled:opacity-60"
+                      onClick={handleBulkIssue}
+                      disabled={bulkIssuing}
+                    >
+                      {bulkIssuing ? "מנפיק..." : `הנפק ${selectedDraftIds.size} נבחרים`}
+                    </button>
+                  </div>
+                ) : null}
                 <div className="max-h-[24rem] space-y-3 overflow-y-auto">
                 {loading ? <EmptyState text="טוען טיוטות..." /> : null}
                 {!loading && filteredDraftInvoices.length === 0 ? <EmptyState text={draftSearch ? "לא נמצאו טיוטות מתאימות לחיפוש." : `עדיין אין טיוטות ${selectedDocumentLabel}.`} action={draftSearch ? undefined : "יצירת טיוטה חדשה ↑"} onAction={draftSearch ? undefined : () => document.getElementById("invoice-form-panel")?.scrollIntoView({ behavior: "smooth" })} /> : null}
@@ -2879,11 +2999,25 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                   const customer = customers.find((item) => item.id === invoice.customerId);
                   const isIssuing = issuingInvoiceId === invoice.id;
                   const isDeleting = deletingDraftId === invoice.id;
+                  const isSelected = selectedDraftIds.has(invoice.id);
 
                   return (
-                    <article key={invoice.id} className="rounded-xl border border-slate-200 p-3">
+                    <article key={invoice.id} className={`rounded-xl border p-3 ${bulkSelectMode && isSelected ? "border-slate-900 bg-slate-50" : "border-slate-200"}`}>
                       <div className="flex items-center justify-between gap-3">
-                        <div>
+                        {bulkSelectMode ? (
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 accent-slate-900"
+                            checked={isSelected}
+                            onChange={() => setSelectedDraftIds((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(invoice.id)) next.delete(invoice.id);
+                              else next.add(invoice.id);
+                              return next;
+                            })}
+                          />
+                        ) : null}
+                        <div className="flex-1">
                           <h3 className="font-medium">{customer?.displayNameHe ?? "לקוח לא ידוע"}</h3>
                           <p className="mt-1 text-sm text-slate-500">
                             {formatDate(invoice.issueDate)} • {invoice.lines.length} שורות • {getDocumentTypeLabel(invoice.documentType)}
@@ -3255,6 +3389,20 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                   );
                 })() : null}
 
+                {/* Data export */}
+                <div className="flex items-center justify-between rounded-xl border border-slate-200 p-3">
+                  <div>
+                    <p className="text-sm font-medium text-slate-700">גיבוי נתונים</p>
+                    <p className="text-xs text-slate-500">ייצוא כל הנתונים בפורמט JSON</p>
+                  </div>
+                  <button
+                    className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    onClick={handleExportData}
+                  >
+                    ייצוא נתונים
+                  </button>
+                </div>
+
                 <div className="rounded-xl border border-slate-200 p-3">
                   <h3 className="text-base font-semibold">הוספת הוצאה</h3>
                   <form className="mt-3 grid gap-3 sm:grid-cols-2 md:grid-cols-5" onSubmit={handleAddExpense}>
@@ -3387,6 +3535,103 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
               </button>
             </div>
           </form>
+        </div>
+      ) : null}
+
+      {/* Global search modal */}
+      {globalSearchOpen ? (
+        <div className="fixed inset-0 z-[80] flex items-start justify-center bg-slate-900/60 px-4 pt-16" onClick={() => setGlobalSearchOpen(false)}>
+          <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl dark:bg-slate-800" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+              <Search className="h-4 w-4 shrink-0 text-slate-400" />
+              <input
+                autoFocus
+                className="flex-1 bg-transparent text-sm outline-none placeholder:text-slate-400 dark:text-white"
+                placeholder="חיפוש לפי שם לקוח, מספר מסמך..."
+                value={globalSearchQuery}
+                onChange={(e) => setGlobalSearchQuery(e.target.value)}
+              />
+              <button onClick={() => setGlobalSearchOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            {globalSearchQuery.trim() === "" ? (
+              <div className="px-4 py-6 text-center text-sm text-slate-400">הקלד לחיפוש...</div>
+            ) : (globalSearchResults.customers.length + globalSearchResults.drafts.length + globalSearchResults.issued.length) === 0 ? (
+              <div className="px-4 py-6 text-center text-sm text-slate-400">לא נמצאו תוצאות</div>
+            ) : (
+              <div className="max-h-[60vh] overflow-y-auto p-2">
+                {globalSearchResults.customers.length > 0 ? (
+                  <div>
+                    <p className="px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-400">לקוחות</p>
+                    {globalSearchResults.customers.map((c) => (
+                      <button
+                        key={c.id}
+                        className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-right hover:bg-slate-100 dark:hover:bg-slate-700"
+                        onClick={() => {
+                          setSelectedTab(isPtur ? DocumentType.RECEIPT : DocumentType.TAX_INVOICE);
+                          setGlobalSearchOpen(false);
+                          setTimeout(() => {
+                            const el = document.querySelector(`[data-customer-id="${c.id}"]`);
+                            el?.scrollIntoView({ behavior: "smooth", block: "center" });
+                          }, 100);
+                        }}
+                      >
+                        <Users className="h-4 w-4 shrink-0 text-slate-400" />
+                        <span className="text-sm font-medium text-slate-800 dark:text-white">{c.displayNameHe}</span>
+                        {c.taxId ? <span className="text-xs text-slate-400">{c.taxId}</span> : null}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                {globalSearchResults.drafts.length > 0 ? (
+                  <div>
+                    <p className="px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-400">טיוטות</p>
+                    {globalSearchResults.drafts.map((inv) => {
+                      const c = customers.find((x) => x.id === inv.customerId);
+                      return (
+                        <button
+                          key={inv.id}
+                          className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-right hover:bg-slate-100 dark:hover:bg-slate-700"
+                          onClick={() => {
+                            setSelectedTab(inv.documentType as WorkspaceTab);
+                            setGlobalSearchOpen(false);
+                          }}
+                        >
+                          <FilePlus2 className="h-4 w-4 shrink-0 text-amber-500" />
+                          <span className="text-sm font-medium text-slate-800 dark:text-white">{c?.displayNameHe ?? "לקוח לא ידוע"}</span>
+                          <span className="text-xs text-slate-400">{formatDate(inv.issueDate)} • {currencyFormatter.format(inv.totalAmount)}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {globalSearchResults.issued.length > 0 ? (
+                  <div>
+                    <p className="px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-400">הונפקו</p>
+                    {globalSearchResults.issued.map((inv) => {
+                      const c = customers.find((x) => x.id === inv.customerId);
+                      return (
+                        <button
+                          key={inv.id}
+                          className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-right hover:bg-slate-100 dark:hover:bg-slate-700"
+                          onClick={() => {
+                            setSelectedTab(inv.documentType as WorkspaceTab);
+                            setIssuedSearch(String(inv.sequenceNumber ?? "") || (c?.displayNameHe ?? ""));
+                            setGlobalSearchOpen(false);
+                          }}
+                        >
+                          <ReceiptText className="h-4 w-4 shrink-0 text-emerald-500" />
+                          <span className="text-sm font-medium text-slate-800 dark:text-white">{c?.displayNameHe ?? "לקוח לא ידוע"}</span>
+                          <span className="text-xs text-slate-400">{String(inv.sequenceNumber ?? "")} • {currencyFormatter.format(inv.totalAmount)}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            )}
+          </div>
         </div>
       ) : null}
     </main>

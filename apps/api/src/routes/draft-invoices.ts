@@ -476,4 +476,30 @@ export async function registerDraftInvoiceRoutes(app: FastifyInstance) {
 
     return reply.code(201).send(draft);
   });
+
+  app.get("/v1/export", async (request, reply) => {
+    const userId = getUserId(request);
+    const [customers, drafts, issued, business] = await Promise.all([
+      prisma.customer.findMany({ where: { business: { userId } }, orderBy: { displayNameHe: "asc" } }),
+      prisma.invoice.findMany({
+        where: { business: { userId }, status: "DRAFT" },
+        include: { lines: true }
+      }),
+      prisma.invoice.findMany({
+        where: { business: { userId }, status: { not: "DRAFT" } },
+        include: { lines: true }
+      }),
+      prisma.business.findFirst({ where: { userId } })
+    ]);
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      business,
+      customers,
+      draftInvoices: drafts,
+      issuedInvoices: issued
+    };
+    reply.header("Content-Type", "application/json");
+    reply.header("Content-Disposition", `attachment; filename="invoice-backup-${new Date().toISOString().slice(0, 10)}.json"`);
+    return reply.send(JSON.stringify(payload, null, 2));
+  });
 }
