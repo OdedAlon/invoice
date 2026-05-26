@@ -1523,20 +1523,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
   }
 
   async function downloadFullExport() {
-    try {
-      const res = await fetch(`${API_URL}/v1/export/full`, { credentials: "include" });
-      if (!res.ok) throw new Error("ייצוא נכשל");
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      const filename = res.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] ?? "invoice-export.zip";
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch {
-      toast("ייצוא הנתונים נכשל — נסה שוב", "error");
-    }
+    await handleExportData();
   }
 
   async function handleImportZip(file: File) {
@@ -2314,7 +2301,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                     return next;
                   });
                   return (
-                  <article key={customer.id} className="rounded-xl border border-slate-200 dark:border-slate-700">
+                  <article key={customer.id} data-customer-id={customer.id} className="rounded-xl border border-slate-200 dark:border-slate-700">
                     <button
                       type="button"
                       className="flex w-full items-center justify-between gap-3 p-3 text-start"
@@ -3002,7 +2989,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                   const isSelected = selectedDraftIds.has(invoice.id);
 
                   return (
-                    <article key={invoice.id} className={`rounded-xl border p-3 ${bulkSelectMode && isSelected ? "border-slate-900 bg-slate-50" : "border-slate-200"}`}>
+                    <article key={invoice.id} data-draft-id={invoice.id} className={`rounded-xl border p-3 ${bulkSelectMode && isSelected ? "border-slate-900 bg-slate-50" : "border-slate-200"}`}>
                       <div className="flex items-center justify-between gap-3">
                         {bulkSelectMode ? (
                           <input
@@ -3389,20 +3376,6 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                   );
                 })() : null}
 
-                {/* Data export */}
-                <div className="flex items-center justify-between rounded-xl border border-slate-200 p-3">
-                  <div>
-                    <p className="text-sm font-medium text-slate-700">גיבוי נתונים</p>
-                    <p className="text-xs text-slate-500">ייצוא כל הנתונים בפורמט JSON</p>
-                  </div>
-                  <button
-                    className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                    onClick={handleExportData}
-                  >
-                    ייצוא נתונים
-                  </button>
-                </div>
-
                 <div className="rounded-xl border border-slate-200 p-3">
                   <h3 className="text-base font-semibold">הוספת הוצאה</h3>
                   <form className="mt-3 grid gap-3 sm:grid-cols-2 md:grid-cols-5" onSubmit={handleAddExpense}>
@@ -3569,12 +3542,12 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                         key={c.id}
                         className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-right hover:bg-slate-100 dark:hover:bg-slate-700"
                         onClick={() => {
-                          setSelectedTab(isPtur ? DocumentType.RECEIPT : DocumentType.TAX_INVOICE);
+                          setCustomerSearch(c.displayNameHe);
                           setGlobalSearchOpen(false);
                           setTimeout(() => {
                             const el = document.querySelector(`[data-customer-id="${c.id}"]`);
                             el?.scrollIntoView({ behavior: "smooth", block: "center" });
-                          }, 100);
+                          }, 200);
                         }}
                       >
                         <Users className="h-4 w-4 shrink-0 text-slate-400" />
@@ -3595,7 +3568,12 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                           className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-right hover:bg-slate-100 dark:hover:bg-slate-700"
                           onClick={() => {
                             setSelectedTab(inv.documentType as WorkspaceTab);
+                            setDraftSearch("");
                             setGlobalSearchOpen(false);
+                            setTimeout(() => {
+                              const el = document.querySelector(`[data-draft-id="${inv.id}"]`);
+                              el?.scrollIntoView({ behavior: "smooth", block: "center" });
+                            }, 200);
                           }}
                         >
                           <FilePlus2 className="h-4 w-4 shrink-0 text-amber-500" />
