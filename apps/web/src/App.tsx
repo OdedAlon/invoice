@@ -323,6 +323,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
   const [editingCustomerId, setEditingCustomerId] = useState<string | null>(null);
   const [expandedCustomerIds, setExpandedCustomerIds] = useState<Set<string>>(new Set());
   const [issuedSearch, setIssuedSearch] = useState("");
+  const [issuedSort, setIssuedSort] = useState("date-desc");
   const [draftSearch, setDraftSearch] = useState("");
   const [deletingDraftId, setDeletingDraftId] = useState<string | null>(null);
   const [markingPaidId, setMarkingPaidId] = useState<string | null>(null);
@@ -371,6 +372,35 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  // ── Auto-fill due date from customer payment terms ────────────
+  useEffect(() => {
+    if (!invoiceForm.customerId || editingDraftId) return;
+    const customer = customers.find((c) => c.id === invoiceForm.customerId);
+    if (!customer || customer.paymentTermsDays === 0) return;
+    const issue = new Date(invoiceForm.issueDate);
+    issue.setDate(issue.getDate() + customer.paymentTermsDays);
+    setInvoiceForm((curr) => ({ ...curr, dueDate: issue.toISOString().slice(0, 10) }));
+  }, [invoiceForm.customerId, invoiceForm.issueDate]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Auto-save draft form to localStorage ─────────────────────
+  const LS_KEY = "invoice-form-autosave";
+  useEffect(() => {
+    if (!invoiceForm.customerId && invoiceForm.lines.every((l) => !l.descriptionHe)) return;
+    try { localStorage.setItem(LS_KEY, JSON.stringify({ form: invoiceForm, tab: selectedTab })); } catch { /* ignore */ }
+  }, [invoiceForm, selectedTab]);
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(LS_KEY);
+      if (!saved) return;
+      const { form, tab } = JSON.parse(saved) as { form: typeof invoiceForm; tab: WorkspaceTab };
+      if (form.customerId || form.lines.some((l: { descriptionHe: string }) => l.descriptionHe)) {
+        setInvoiceForm(form);
+        setSelectedTab(tab);
+      }
+    } catch { /* ignore */ }
+  // Only run once on mount
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Toasts + dialogs ─────────────────────────────────────────
   type Toast = { id: number; message: string; type: "info" | "success" | "error" };
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -399,6 +429,19 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
     selectedDocumentType === DocumentType.INVOICE_RECEIPT;
   const totals = useMemo(() => calculateDraftInvoice(invoiceForm.lines), [invoiceForm.lines]);
   const selectedDocumentLabel = getTabLabel(selectedTab);
+
+  // Per-customer invoice stats (count, total revenue, last invoice date)
+  const customerStats = useMemo(() => {
+    const map = new Map<string, { count: number; total: number; lastDate: string }>();
+    for (const inv of issuedInvoices) {
+      const s = map.get(inv.customerId) ?? { count: 0, total: 0, lastDate: "" };
+      s.count++;
+      s.total += inv.totalAmount;
+      if (!s.lastDate || inv.issueDate > s.lastDate) s.lastDate = inv.issueDate;
+      map.set(inv.customerId, s);
+    }
+    return map;
+  }, [issuedInvoices]);
 
   const filteredDraftInvoices = useMemo(() => {
     const search = draftSearch.trim().toLowerCase();
@@ -456,8 +499,13 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
       const sequence = String(invoice.sequenceNumber ?? "");
 
       return customerName.includes(search) || sequence.includes(search);
+    }).sort((a, b) => {
+      if (issuedSort === "date-asc") return a.issueDate < b.issueDate ? -1 : 1;
+      if (issuedSort === "amount-desc") return b.totalAmount - a.totalAmount;
+      if (issuedSort === "amount-asc") return a.totalAmount - b.totalAmount;
+      return a.issueDate < b.issueDate ? 1 : -1; // date-desc (default)
     });
-  }, [filteredIssuedByType, issuedSearch, issuedCustomerFilter, issuedFromDate, issuedToDate, customers]);
+  }, [filteredIssuedByType, issuedSearch, issuedCustomerFilter, issuedFromDate, issuedToDate, customers, issuedSort]);
 
   // Reset to page 1 whenever the filter set changes
   useEffect(() => {
@@ -851,6 +899,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
         lines: [{ ...emptyInvoiceLine, vatRate: isPtur ? 0 : 17 }]
       }));
       setReceiptPaymentForm(emptyReceiptPaymentForm);
+      try { localStorage.removeItem("invoice-form-autosave"); } catch { /* ignore */ }
       await loadData();
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "שמירת הטיוטה נכשלה");
@@ -1239,6 +1288,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
         lines: [{ ...emptyInvoiceLine, vatRate: isPtur ? 0 : 17 }]
       }));
       setReceiptPaymentForm(emptyReceiptPaymentForm);
+      try { localStorage.removeItem("invoice-form-autosave"); } catch { /* ignore */ }
       await loadData();
       toast("הטיוטה עודכנה בהצלחה", "success");
     } catch (e) {
@@ -2172,9 +2222,10 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                       className="flex w-full items-center justify-between gap-3 p-3 text-start"
                       onClick={toggleExpand}
                     >
-                      <div>
+                      <div className="min-w-0">
                         <h3 className="font-medium">{customer.displayNameHe}</h3>
                         <p className="mt-0.5 text-xs text-slate-500">{customer.type === "COMPANY" ? "חברה" : "לקוח פרטי"} • {customer.paymentTermsDays} ימי אשראי</p>
+                        {(() => { const s = customerStats.get(customer.id); return s ? <p className="mt-0.5 text-xs text-slate-400">{s.count} מסמכים • {currencyFormatter.format(s.total)}</p> : null; })()}
                       </div>
                       <ChevronDown className={`h-4 w-4 shrink-0 text-slate-400 transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`} />
                     </button>
@@ -2823,7 +2874,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                 />
                 <div className="max-h-[24rem] space-y-3 overflow-y-auto">
                 {loading ? <EmptyState text="טוען טיוטות..." /> : null}
-                {!loading && filteredDraftInvoices.length === 0 ? <EmptyState text={draftSearch ? "לא נמצאו טיוטות מתאימות לחיפוש." : `עדיין אין טיוטות ${selectedDocumentLabel}. צרו את הטיוטה הראשונה.`} /> : null}
+                {!loading && filteredDraftInvoices.length === 0 ? <EmptyState text={draftSearch ? "לא נמצאו טיוטות מתאימות לחיפוש." : `עדיין אין טיוטות ${selectedDocumentLabel}.`} action={draftSearch ? undefined : "יצירת טיוטה חדשה ↑"} onAction={draftSearch ? undefined : () => document.getElementById("invoice-form-panel")?.scrollIntoView({ behavior: "smooth" })} /> : null}
                 {filteredDraftInvoices.map((invoice) => {
                   const customer = customers.find((item) => item.id === invoice.customerId);
                   const isIssuing = issuingInvoiceId === invoice.id;
@@ -2929,6 +2980,15 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                       value={issuedToDate}
                       onChange={(event) => setIssuedToDate(event.target.value)}
                     />
+                  </Field>
+
+                  <Field label="מיון">
+                    <select className="input bg-white" value={issuedSort} onChange={(e) => setIssuedSort(e.target.value)}>
+                      <option value="date-desc">תאריך — חדש לישן</option>
+                      <option value="date-asc">תאריך — ישן לחדש</option>
+                      <option value="amount-desc">סכום — גבוה לנמוך</option>
+                      <option value="amount-asc">סכום — נמוך לגבוה</option>
+                    </select>
                   </Field>
 
                   <div className="flex gap-2 sm:col-span-2 xl:col-span-1">
@@ -3143,6 +3203,57 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                 </div>
 
                 <MonthlyIncomeExpenseChart data={chartSeries} currencyFormatter={currencyFormatter} />
+
+                {/* Monthly breakdown table */}
+                {reportMonth === "ALL" && chartSeries.some((m) => m.income > 0 || m.expense > 0) ? (
+                  <div className="overflow-x-auto rounded-xl border border-slate-200">
+                    <table className="w-full text-sm">
+                      <thead className="border-b border-slate-200 bg-slate-50 text-xs text-slate-500">
+                        <tr>
+                          <th className="px-3 py-2 text-right font-medium">חודש</th>
+                          <th className="px-3 py-2 text-right font-medium">הכנסות</th>
+                          <th className="px-3 py-2 text-right font-medium">הוצאות</th>
+                          <th className="px-3 py-2 text-right font-medium">רווח</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {chartSeries.filter((m) => m.income > 0 || m.expense > 0).map((m) => (
+                          <tr key={m.key} className="hover:bg-slate-50">
+                            <td className="px-3 py-2 font-medium text-slate-700">{m.label}</td>
+                            <td className="px-3 py-2 text-emerald-700">{currencyFormatter.format(m.income)}</td>
+                            <td className="px-3 py-2 text-rose-700">{currencyFormatter.format(m.expense)}</td>
+                            <td className={`px-3 py-2 font-medium ${m.income - m.expense >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{currencyFormatter.format(m.income - m.expense)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
+
+                {/* Expense category breakdown */}
+                {expenses.length > 0 ? (() => {
+                  const byCategory = new Map<string, number>();
+                  for (const exp of expenses) {
+                    const isInYear = exp.date.startsWith(String(reportYear));
+                    const isInMonth = reportMonth === "ALL" || exp.date.slice(5, 7) === reportMonth;
+                    if (isInYear && isInMonth) byCategory.set(exp.category, (byCategory.get(exp.category) ?? 0) + exp.amount);
+                  }
+                  const sorted = Array.from(byCategory.entries()).sort((a, b) => b[1] - a[1]);
+                  if (sorted.length === 0) return null;
+                  return (
+                    <div className="rounded-xl border border-slate-200 p-3">
+                      <h3 className="mb-2 text-sm font-semibold text-slate-700">הוצאות לפי קטגוריה</h3>
+                      <div className="space-y-1.5">
+                        {sorted.map(([cat, amount]) => (
+                          <div key={cat} className="flex items-center justify-between text-sm">
+                            <span className="text-slate-600">{cat}</span>
+                            <span className="font-medium text-rose-700">{currencyFormatter.format(amount)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })() : null}
 
                 <div className="rounded-xl border border-slate-200 p-3">
                   <h3 className="text-base font-semibold">הוספת הוצאה</h3>
@@ -3713,8 +3824,17 @@ function ReportsPanel({
   );
 }
 
-function EmptyState({ text }: { text: string }) {
-  return <div className="rounded-2xl border border-dashed border-slate-300 p-5 text-center text-sm text-slate-500">{text}</div>;
+function EmptyState({ text, action, onAction }: { text: string; action?: string; onAction?: () => void }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-slate-300 p-5 text-center text-sm text-slate-500">
+      {text}
+      {action && onAction ? (
+        <button type="button" onClick={onAction} className="mt-2 block w-full text-xs font-medium text-slate-700 underline underline-offset-2 hover:text-slate-900">
+          {action}
+        </button>
+      ) : null}
+    </div>
+  );
 }
 
 export default App;
