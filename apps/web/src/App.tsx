@@ -354,6 +354,23 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
   const [newServiceItemPrice, setNewServiceItemPrice] = useState("");
 
   const [darkMode, setDarkMode] = useState(() => document.documentElement.classList.contains("dark"));
+  const [settingsBannerDismissed, setSettingsBannerDismissed] = useState(() => !!localStorage.getItem("settings-banner-dismissed"));
+
+  // Quick-create customer modal
+  const [quickCreateOpen, setQuickCreateOpen] = useState(false);
+  const [quickCreateName, setQuickCreateName] = useState("");
+  const [quickCreatePhone, setQuickCreatePhone] = useState("");
+  const [quickCreateEmail, setQuickCreateEmail] = useState("");
+  const [savingQuickCreate, setSavingQuickCreate] = useState(false);
+
+  // Recurring templates
+  const [templates, setTemplates] = useState<Array<{ name: string; form: CreateDraftInvoiceInput }>>(() => {
+    try { return JSON.parse(localStorage.getItem("invoice-templates") ?? "[]"); } catch { return []; }
+  });
+
+  // Customer pagination
+  const [customerPage, setCustomerPage] = useState(1);
+  const CUSTOMER_PAGE_SIZE = 10;
   useEffect(() => {
     document.documentElement.classList.toggle("dark", darkMode);
     localStorage.setItem("theme", darkMode ? "dark" : "light");
@@ -485,6 +502,13 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
           )
         : customers,
     [customers, customerSearch]
+  );
+
+  const customerTotalPages = Math.max(1, Math.ceil(filteredCustomers.length / CUSTOMER_PAGE_SIZE));
+  const customerCurrentPage = Math.min(customerPage, customerTotalPages);
+  const pagedCustomers = useMemo(
+    () => filteredCustomers.slice((customerCurrentPage - 1) * CUSTOMER_PAGE_SIZE, customerCurrentPage * CUSTOMER_PAGE_SIZE),
+    [filteredCustomers, customerCurrentPage, CUSTOMER_PAGE_SIZE]
   );
 
   const filteredIssuedByType = useMemo(
@@ -702,6 +726,10 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
   useEffect(() => {
     localStorage.setItem("invoice-service-items", JSON.stringify(serviceItems));
   }, [serviceItems]);
+
+  useEffect(() => {
+    localStorage.setItem("invoice-templates", JSON.stringify(templates));
+  }, [templates]);
 
   useEffect(() => {
     if (isPtur) {
@@ -1360,6 +1388,36 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
     }
   }
 
+  async function handleQuickCreateCustomer() {
+    if (!quickCreateName.trim()) return;
+    setSavingQuickCreate(true);
+    try {
+      const response = await fetch(`${API_URL}/v1/customers`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ displayNameHe: quickCreateName.trim(), type: "PRIVATE", email: quickCreateEmail.trim(), phone: quickCreatePhone.trim(), paymentTermsDays: 0 })
+      });
+      if (!response.ok) throw new Error("יצירת לקוח נכשלה");
+      const created = (await response.json()) as Customer;
+      await loadData();
+      setInvoiceForm((f) => ({ ...f, customerId: created.id }));
+      setQuickCreateOpen(false);
+      setQuickCreateName(""); setQuickCreatePhone(""); setQuickCreateEmail("");
+      toast(`הלקוח "${created.displayNameHe}" נוצר ונבחר`, "success");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "יצירת לקוח נכשלה", "error");
+    } finally {
+      setSavingQuickCreate(false);
+    }
+  }
+
+  function handleSaveAsTemplate() {
+    const name = `תבנית — ${customers.find((c) => c.id === invoiceForm.customerId)?.displayNameHe ?? "ללא לקוח"} ${new Date().toLocaleDateString("he-IL")}`;
+    setTemplates((prev) => [...prev, { name, form: { ...invoiceForm, customerId: "", issueDate: today, dueDate: today } }]);
+    toast(`התבנית "${name}" נשמרה`, "success");
+  }
+
   async function handleBulkIssue() {
     const ids = Array.from(selectedDraftIds);
     if (ids.length === 0) return;
@@ -1687,12 +1745,13 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
               <span className="hidden text-sm font-medium sm:inline">יציאה</span>
             </button>
             <button
-              className="rounded-xl border border-white/20 p-2 text-white hover:bg-white/10"
+              className="flex items-center gap-1.5 rounded-xl border border-white/20 px-2 py-2 text-white hover:bg-white/10"
               onClick={() => { setGlobalSearchOpen(true); setGlobalSearchQuery(""); }}
               aria-label="חיפוש גלובלי (Ctrl+K)"
               title="חיפוש גלובלי (Ctrl+K)"
             >
               <Search className="h-4 w-4" />
+              <span className="hidden rounded bg-white/20 px-1 py-0.5 text-[10px] font-mono sm:inline">Ctrl+K</span>
             </button>
             <button
               className="rounded-xl border border-white/20 p-2 text-white hover:bg-white/10"
@@ -1715,9 +1774,13 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                 <div className="my-auto mx-2 h-5 w-px shrink-0 bg-slate-200 dark:bg-slate-700" />
               ) : null}
               <button
-                onClick={() => {
+                onClick={async () => {
+                  const formHasContent = invoiceForm.customerId || invoiceForm.lines.some((l) => l.descriptionHe);
+                  if (formHasContent && tab !== selectedTab && !editingDraftId) {
+                    const ok = await confirmAction("יש נתונים לא שמורים בטופס. לעבור לטאב בלי לשמור?");
+                    if (!ok) return;
+                  }
                   setSelectedTab(tab);
-
                   if (tab !== "QUOTE" && tab !== "REPORTS" && tab !== DocumentType.RETURN_NOTE) {
                     setInvoiceForm((current) => ({ ...current, documentType: tab as DocumentType }));
                   }
@@ -1733,6 +1796,24 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
             </Fragment>
           ))}
         </nav>
+
+        {/* Incomplete business settings banner */}
+        {!loading && !settingsBannerDismissed && !businessSettings.nameHe ? (
+          <div className="mx-4 mb-4 flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm sm:mx-6">
+            <span className="text-amber-800">⚠️ טרם הוגדרו פרטי העסק — מלאו שם עסק, מספר עוסק וכתובת כדי שיופיעו על המסמכים.</span>
+            <div className="flex shrink-0 gap-2">
+              <button
+                className="rounded-lg border border-amber-300 bg-white px-3 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100"
+                onClick={() => setActiveDrawer("business")}
+              >הגדרות עסק</button>
+              <button
+                className="rounded-lg p-1 text-amber-600 hover:text-amber-900"
+                onClick={() => { setSettingsBannerDismissed(true); localStorage.setItem("settings-banner-dismissed", "1"); }}
+                aria-label="סגור"
+              ><X className="h-4 w-4" /></button>
+            </div>
+          </div>
+        ) : null}
 
         {activeDrawer !== null ? (
           <div className="fixed inset-0 z-40 bg-slate-900/50" onClick={() => setActiveDrawer(null)} />
@@ -2293,13 +2374,17 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                 {loading ? <EmptyState text="טוען לקוחות..." /> : null}
                 {!loading && customers.length === 0 ? <EmptyState text="עדיין אין לקוחות. צרו את הלקוח הראשון." /> : null}
                 {!loading && customers.length > 0 && filteredCustomers.length === 0 ? <EmptyState text="לא נמצאו לקוחות." /> : null}
-                {filteredCustomers.map((customer) => {
+                {pagedCustomers.map((customer) => {
                   const isExpanded = expandedCustomerIds.has(customer.id);
                   const toggleExpand = () => setExpandedCustomerIds((prev) => {
                     const next = new Set(prev);
                     if (next.has(customer.id)) { next.delete(customer.id); } else { next.add(customer.id); }
                     return next;
                   });
+                  const customerDocs = [...issuedInvoices, ...demoDocs]
+                    .filter((inv) => inv.customerId === customer.id)
+                    .sort((a, b) => b.issueDate.localeCompare(a.issueDate))
+                    .slice(0, 5);
                   return (
                   <article key={customer.id} data-customer-id={customer.id} className="rounded-xl border border-slate-200 dark:border-slate-700">
                     <button
@@ -2322,6 +2407,17 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                           {customer.phone ? <span>טלפון: {customer.phone}</span> : null}
                           {customer.addressHe || customer.cityHe ? <span>כתובת: {[customer.addressHe, customer.cityHe].filter(Boolean).join(", ")}</span> : null}
                         </div>
+                        {customerDocs.length > 0 ? (
+                          <div className="mt-3 space-y-1.5">
+                            <p className="text-xs font-medium text-slate-500">מסמכים אחרונים</p>
+                            {customerDocs.map((inv) => (
+                              <div key={inv.id} className="flex items-center justify-between rounded-lg bg-slate-50 px-2 py-1.5 text-xs dark:bg-slate-700">
+                                <span className="text-slate-500">{formatDate(inv.issueDate)} • {getDocumentTypeLabel(inv.documentType)}</span>
+                                <span className="font-medium text-slate-800 dark:text-slate-200">{currencyFormatter.format(inv.totalAmount)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
                         <div className="mt-3 flex gap-2">
                           <button
                             type="button"
@@ -2351,6 +2447,21 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                   </article>
                   );
                 })}
+                {filteredCustomers.length > CUSTOMER_PAGE_SIZE ? (
+                  <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-900">
+                    <button
+                      className="rounded-lg border border-slate-300 px-3 py-1.5 font-medium text-slate-700 hover:bg-white disabled:opacity-40"
+                      onClick={() => setCustomerPage((p) => Math.max(1, p - 1))}
+                      disabled={customerCurrentPage === 1}
+                    >→ הקודם</button>
+                    <span className="text-slate-500">{customerCurrentPage} / {customerTotalPages}</span>
+                    <button
+                      className="rounded-lg border border-slate-300 px-3 py-1.5 font-medium text-slate-700 hover:bg-white disabled:opacity-40"
+                      onClick={() => setCustomerPage((p) => Math.min(customerTotalPages, p + 1))}
+                      disabled={customerCurrentPage === customerTotalPages}
+                    >הבא ←</button>
+                  </div>
+                ) : null}
               </div>
             </Panel>
           </div>
@@ -2621,10 +2732,43 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                 </div>
               ) : null}
               <form id="invoice-form-panel" className="grid gap-5" onSubmit={editingDraftId ? handleUpdateDraft : handleInvoiceSubmit}>
+                {/* Templates bar */}
+                {templates.length > 0 || true ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {templates.length > 0 ? (
+                      <select
+                        className="input flex-1 text-sm"
+                        value=""
+                        onChange={(e) => {
+                          const tpl = templates.find((t) => t.name === e.target.value);
+                          if (tpl) {
+                            setInvoiceForm((f) => ({ ...tpl.form, documentType: f.documentType, issueDate: today, dueDate: today }));
+                            toast("התבנית נטענה", "success");
+                          }
+                        }}
+                      >
+                        <option value="">טען תבנית...</option>
+                        {templates.map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
+                      </select>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="rounded-xl border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                      onClick={handleSaveAsTemplate}
+                      title="Ctrl+S לשמירת טיוטה"
+                    >
+                      שמור כתבנית
+                    </button>
+                  </div>
+                ) : null}
                 <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-4">
                   <Field label="לקוח">
-                    <select className="input" value={invoiceForm.customerId} onChange={(event) => updateInvoiceField("customerId", event.target.value)}>
+                    <select className="input" value={invoiceForm.customerId} onChange={(event) => {
+                      if (event.target.value === "__new__") { setQuickCreateOpen(true); }
+                      else updateInvoiceField("customerId", event.target.value);
+                    }}>
                       <option value="">בחרו לקוח</option>
+                      <option value="__new__">+ הוספת לקוח חדש</option>
                       {customers.map((customer) => (
                         <option key={customer.id} value={customer.id}>{customer.displayNameHe}</option>
                       ))}
@@ -2939,9 +3083,12 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                   {!isPtur ? <AmountTile label="מע״מ" value={currencyFormatter.format(totals.vatAmount)} /> : null}
                   <AmountTile label="סה״כ לתשלום" value={currencyFormatter.format(totals.totalAmount)} />
                   <div className="flex items-end justify-end">
-                    <button className="w-full rounded-xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 transition hover:bg-slate-200 dark:bg-slate-200 dark:text-slate-900 dark:hover:bg-slate-300 disabled:opacity-60" disabled={savingInvoice || customers.length === 0}>
-                      {savingInvoice ? "שומר..." : editingDraftId ? `עדכון טיוטת ${selectedDocumentLabel}` : `שמירת טיוטת ${selectedDocumentLabel}`}
-                    </button>
+                    <div className="w-full">
+                      <button className="w-full rounded-xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 transition hover:bg-slate-200 dark:bg-slate-200 dark:text-slate-900 dark:hover:bg-slate-300 disabled:opacity-60" disabled={savingInvoice || customers.length === 0}>
+                        {savingInvoice ? "שומר..." : editingDraftId ? `עדכון טיוטת ${selectedDocumentLabel}` : `שמירת טיוטת ${selectedDocumentLabel}`}
+                      </button>
+                      <p className="mt-1 text-center text-[10px] text-white/50">Ctrl+S</p>
+                    </div>
                   </div>
                 </div>
                 </form>
@@ -3208,6 +3355,15 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                           <Mail className="h-3.5 w-3.5" />
                           שלח במייל
                         </button>
+                        {isOverdue && customer?.email ? (
+                          <a
+                            href={`mailto:${customer.email}?subject=${encodeURIComponent(`תזכורת תשלום — מסמך ${invoice.sequenceNumber ?? ""}`)}&body=${encodeURIComponent(`שלום ${customer.displayNameHe},\n\nמסמך מספר ${invoice.sequenceNumber ?? ""} על סך ${currencyFormatter.format(invoice.balanceDue)} טרם שולם.\nתאריך פירעון: ${formatDate(invoice.dueDate ?? "")}.\n\nנשמח לקבל את התשלום בהקדם.\n\nבברכה`)}`}
+                            className="flex items-center gap-1.5 rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 hover:bg-rose-100"
+                          >
+                            <Mail className="h-3.5 w-3.5" />
+                            תזכורת חוב
+                          </a>
+                        ) : null}
                         <button
                           className="flex items-center gap-1.5 rounded-xl border border-green-300 bg-green-50 px-3 py-2 text-xs font-medium text-green-700 hover:bg-green-100"
                           title="מייצא PDF ושולח דרך WhatsApp (במחשב — הקובץ יורד, ולאחר מכן יפתח WhatsApp Web לצירוף ידני)"
@@ -3508,6 +3664,39 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
               </button>
             </div>
           </form>
+        </div>
+      ) : null}
+
+      {/* Quick-create customer modal */}
+      {quickCreateOpen ? (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/60 px-4" onClick={() => setQuickCreateOpen(false)}>
+          <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl dark:bg-slate-800" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="font-semibold">לקוח חדש</h2>
+              <button onClick={() => setQuickCreateOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="space-y-3">
+              <Field label="שם לקוח *">
+                <input autoFocus className="input" value={quickCreateName} onChange={(e) => setQuickCreateName(e.target.value)} placeholder="שם מלא / שם חברה" />
+              </Field>
+              <Field label="טלפון">
+                <input className="input" type="tel" value={quickCreatePhone} onChange={(e) => setQuickCreatePhone(e.target.value)} />
+              </Field>
+              <Field label="אימייל">
+                <input className="input" type="email" value={quickCreateEmail} onChange={(e) => setQuickCreateEmail(e.target.value)} />
+              </Field>
+            </div>
+            <div className="mt-4 flex gap-2">
+              <button
+                className="flex-1 rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-60 dark:bg-slate-200 dark:text-slate-900"
+                onClick={handleQuickCreateCustomer}
+                disabled={savingQuickCreate || !quickCreateName.trim()}
+              >
+                {savingQuickCreate ? "שומר..." : "צור לקוח"}
+              </button>
+              <button className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50" onClick={() => setQuickCreateOpen(false)}>ביטול</button>
+            </div>
+          </div>
         </div>
       ) : null}
 
