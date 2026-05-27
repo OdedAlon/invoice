@@ -1,4 +1,4 @@
-import { useEffect, Fragment, useMemo, useState, useCallback } from "react";
+import { useEffect, Fragment, useMemo, useState, useCallback, useRef } from "react";
 import type { FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Building2, ChevronDown, FileX, FilePlus2, Mail, Moon, Printer, ReceiptText, RotateCcw, Search, Share2, Sun, X, Users } from "lucide-react";
@@ -437,13 +437,20 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Toasts + dialogs ─────────────────────────────────────────
-  type Toast = { id: number; message: string; type: "info" | "success" | "error" };
+  type Toast = { id: number; message: string; type: "info" | "success" | "error"; action?: { label: string; onClick: () => void } };
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const toast = (message: string, type: Toast["type"] = "info") => {
+  const toast = (message: string, type: Toast["type"] = "info", action?: Toast["action"]) => {
     const id = Date.now() + Math.random();
-    setToasts((prev) => [...prev, { id, message, type }]);
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
+    setToasts((prev) => [...prev, { id, message, type, action }]);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), action ? 5500 : 4000);
   };
+
+  // ── Soft-delete (undo) ────────────────────────────────────────
+  const [pendingDeleteSet, setPendingDeleteSet] = useState<Set<string>>(new Set());
+  const pendingDeleteTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+
+  // ── Focus management ─────────────────────────────────────────
+  const customerSelectRef = useRef<HTMLSelectElement>(null);
   type ConfirmState = { message: string; resolve: (ok: boolean) => void } | null;
   const [confirmDialog, setConfirmDialog] = useState<ConfirmState>(null);
   const confirmAction = (message: string) =>
@@ -970,6 +977,8 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
       setReceiptPaymentForm(emptyReceiptPaymentForm);
       try { localStorage.removeItem("invoice-form-autosave"); } catch { /* ignore */ }
       await loadData();
+      // Return focus to customer selector for fast repeat entry
+      setTimeout(() => customerSelectRef.current?.focus(), 50);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "שמירת הטיוטה נכשלה");
     } finally {
@@ -1239,26 +1248,34 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
     window.open(`${API_URL}/v1/invoices/${invoiceId}/export-html`, "_blank", "noopener,noreferrer");
   }
 
-  async function handleDeleteDraft(invoiceId: string) {
-    if (!await confirmAction("האם למחוק את הטיוטה? לא ניתן לשחזרה.")) return;
-    setDeletingDraftId(invoiceId);
-    setError(null);
-    try {
-      const response = await fetch(`${API_URL}/v1/invoices/drafts/${invoiceId}`, {
-        method: "DELETE",
-        credentials: "include"
-      });
-      if (!response.ok) {
-        const payload = (await response.json()) as { message?: string };
-        throw new Error(payload.message ?? "מחיקת הטיוטה נכשלה");
+  function handleDeleteDraft(invoiceId: string) {
+    // Optimistically hide and give 5s undo window
+    setPendingDeleteSet((prev) => new Set([...prev, invoiceId]));
+    const tid = setTimeout(async () => {
+      pendingDeleteTimers.current.delete(invoiceId);
+      setPendingDeleteSet((prev) => { const next = new Set(prev); next.delete(invoiceId); return next; });
+      setDeletingDraftId(invoiceId);
+      try {
+        const response = await fetch(`${API_URL}/v1/invoices/drafts/${invoiceId}`, { method: "DELETE", credentials: "include" });
+        if (!response.ok) { const p = (await response.json()) as { message?: string }; throw new Error(p.message ?? "מחיקת הטיוטה נכשלה"); }
+        await loadData();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "מחיקת הטיוטה נכשלה");
+        toast("מחיקת הטיוטה נכשלה", "error");
+      } finally {
+        setDeletingDraftId(null);
       }
-      await loadData();
-      toast("הטיוטה נמחקה", "success");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "מחיקת הטיוטה נכשלה");
-    } finally {
-      setDeletingDraftId(null);
-    }
+    }, 5000);
+    pendingDeleteTimers.current.set(invoiceId, tid);
+    toast("הטיוטה תימחק בעוד 5 שניות", "info", {
+      label: "ביטול",
+      onClick: () => {
+        clearTimeout(pendingDeleteTimers.current.get(invoiceId));
+        pendingDeleteTimers.current.delete(invoiceId);
+        setPendingDeleteSet((prev) => { const next = new Set(prev); next.delete(invoiceId); return next; });
+        toast("המחיקה בוטלה", "success");
+      }
+    });
   }
 
   async function handleMarkPaid(invoiceId: string) {
@@ -1816,7 +1833,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
         ) : null}
 
         {activeDrawer !== null ? (
-          <div className="fixed inset-0 z-40 bg-slate-900/50" onClick={() => setActiveDrawer(null)} />
+          <div className="backdrop-fade-in fixed inset-0 z-40 bg-slate-900/50" onClick={() => setActiveDrawer(null)} />
         ) : null}
 
         {activeDrawer === "business" ? (
@@ -2371,7 +2388,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                 />
               </div>
               <div className="max-h-[28rem] space-y-3 overflow-y-auto">
-                {loading ? <EmptyState text="טוען לקוחות..." /> : null}
+                {loading ? <SkeletonList rows={4} /> : null}
                 {!loading && customers.length === 0 ? <EmptyState text="עדיין אין לקוחות. צרו את הלקוח הראשון." /> : null}
                 {!loading && customers.length > 0 && filteredCustomers.length === 0 ? <EmptyState text="לא נמצאו לקוחות." /> : null}
                 {pagedCustomers.map((customer) => {
@@ -2763,7 +2780,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                 ) : null}
                 <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-4">
                   <Field label="לקוח">
-                    <select className="input" value={invoiceForm.customerId} onChange={(event) => {
+                    <select ref={customerSelectRef} className="input" value={invoiceForm.customerId} onChange={(event) => {
                       if (event.target.value === "__new__") { setQuickCreateOpen(true); }
                       else updateInvoiceField("customerId", event.target.value);
                     }}>
@@ -3127,9 +3144,9 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                   </div>
                 ) : null}
                 <div className="max-h-[24rem] space-y-3 overflow-y-auto">
-                {loading ? <EmptyState text="טוען טיוטות..." /> : null}
+                {loading ? <SkeletonList rows={3} /> : null}
                 {!loading && filteredDraftInvoices.length === 0 ? <EmptyState text={draftSearch ? "לא נמצאו טיוטות מתאימות לחיפוש." : `עדיין אין טיוטות ${selectedDocumentLabel}.`} action={draftSearch ? undefined : "יצירת טיוטה חדשה ↑"} onAction={draftSearch ? undefined : () => document.getElementById("invoice-form-panel")?.scrollIntoView({ behavior: "smooth" })} /> : null}
-                {filteredDraftInvoices.map((invoice) => {
+                {filteredDraftInvoices.filter((inv) => !pendingDeleteSet.has(inv.id)).map((invoice) => {
                   const customer = customers.find((item) => item.id === invoice.customerId);
                   const isIssuing = issuingInvoiceId === invoice.id;
                   const isDeleting = deletingDraftId === invoice.id;
@@ -3281,7 +3298,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                 </div>
 
                 <div className="max-h-[28rem] space-y-3 overflow-y-auto">
-                {loading ? <EmptyState text="טוען מסמכים שהונפקו..." /> : null}
+                {loading ? <SkeletonList rows={3} /> : null}
                 {!loading && filteredIssuedByType.length === 0 ? (
                   <EmptyState text={`עדיין לא הונפקו ${selectedDocumentLabel}.`} />
                 ) : null}
@@ -3594,7 +3611,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
         {toasts.map((t) => (
           <div
             key={t.id}
-            className={`pointer-events-auto rounded-xl px-4 py-3 text-sm shadow-lg transition ${
+            className={`pointer-events-auto flex items-center justify-between gap-3 rounded-xl px-4 py-3 text-sm shadow-lg transition ${
               t.type === "success"
                 ? "border border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
                 : t.type === "error"
@@ -3603,7 +3620,15 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
             }`}
             role="status"
           >
-            {t.message}
+            <span>{t.message}</span>
+            {t.action ? (
+              <button
+                className="shrink-0 rounded-lg border border-current/30 px-3 py-1 text-xs font-semibold opacity-80 hover:opacity-100"
+                onClick={() => { t.action!.onClick(); setToasts((prev) => prev.filter((x) => x.id !== t.id)); }}
+              >
+                {t.action.label}
+              </button>
+            ) : null}
           </div>
         ))}
       </div>
@@ -4248,6 +4273,29 @@ function EmptyState({ text, action, onAction }: { text: string; action?: string;
           {action}
         </button>
       ) : null}
+    </div>
+  );
+}
+
+function SkeletonList({ rows = 3 }: { rows?: number }) {
+  return (
+    <div className="space-y-3">
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} className="animate-pulse rounded-xl border border-slate-200 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex-1 space-y-2">
+              <div className="h-4 w-2/5 rounded bg-slate-200" />
+              <div className="h-3 w-3/5 rounded bg-slate-100" />
+            </div>
+            <div className="h-6 w-14 rounded-full bg-slate-100" />
+          </div>
+          <div className="mt-3 flex gap-2">
+            <div className="h-7 w-16 rounded-lg bg-slate-200" />
+            <div className="h-7 w-12 rounded-lg bg-slate-100" />
+            <div className="h-7 w-20 rounded-lg bg-slate-100" />
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
