@@ -104,6 +104,13 @@ function buildStampSvg(businessName: string, verificationHash: string): string {
   </svg>`;
 }
 
+/** Email-safe stamp — embeds the SVG as a base64 data URI in an img tag so rotation and circles render correctly. */
+function buildEmailStampHtml(businessName: string, verificationHash: string): string {
+  const svg = buildStampSvg(businessName, verificationHash);
+  const b64 = Buffer.from(svg).toString("base64");
+  return `<img src="data:image/svg+xml;base64,${b64}" width="150" height="150" alt="חותמת דיגיטלית" style="display:block" />`;
+}
+
 function buildVerificationHash(invoice: InvoiceForExport): string {
   const sigData = [invoice.id, invoice.sequenceNumber ?? "draft", String(invoice.totalAmount), invoice.customerId].join("|");
   return createHmac("sha256", `invoice-sig-${invoice.business.taxId}`)
@@ -318,7 +325,7 @@ export function buildEmailHtml(invoice: InvoiceForExport): string {
     : "";
 
   const stampSection = isReceiptDocument
-    ? `<div style="text-align:left;padding:0 24px 24px">${buildStampSvg(invoice.business.nameHe, verificationHash)}</div>`
+    ? `<div style="text-align:left;padding:0 24px 24px">${buildEmailStampHtml(invoice.business.nameHe, verificationHash)}</div>`
     : "";
 
   const logoHtml = businessLogo

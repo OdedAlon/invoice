@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { Resend } from "resend";
+import nodemailer from "nodemailer";
 import { getInvoiceForExport } from "../data/prisma-store.js";
 import { buildEmailHtml } from "../lib/invoice-html.js";
 import { getDocumentTypeLabel } from "@invoice/shared";
@@ -13,15 +13,23 @@ type SendEmailParams = { id: string };
 type SendEmailBody = { to?: string };
 
 export async function registerSendEmailRoutes(app: FastifyInstance) {
-  const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.RESEND_FROM ?? "onboarding@resend.dev";
+  const gmailUser = process.env.GMAIL_USER;
+  const gmailPass = process.env.GMAIL_APP_PASSWORD;
 
-  if (!apiKey) {
-    app.log.warn("RESEND_API_KEY not set — email sending disabled");
+  if (!gmailUser || !gmailPass) {
+    app.log.warn("GMAIL_USER or GMAIL_APP_PASSWORD not set — email sending disabled");
     return;
   }
 
-  const resend = new Resend(apiKey);
+  const transporter = nodemailer.createTransport({
+    host: "smtp.gmail.com",
+    port: 587,
+    secure: false, // STARTTLS
+    auth: {
+      user: gmailUser,
+      pass: gmailPass, // Gmail App Password (not your account password)
+    },
+  });
 
   app.post<{ Params: SendEmailParams; Body: SendEmailBody }>(
     "/v1/invoices/:id/send-email",
@@ -47,15 +55,15 @@ export async function registerSendEmailRoutes(app: FastifyInstance) {
       const subject = `${docLabel} ${numberPart} מ${invoice.business.nameHe}`;
       const html = buildEmailHtml(invoice);
 
-      const { error } = await resend.emails.send({
-        from,
-        to,
-        subject,
-        html
-      });
-
-      if (error) {
-        app.log.error({ error }, "Resend error");
+      try {
+        await transporter.sendMail({
+          from: `"${invoice.business.nameHe}" <${gmailUser}>`,
+          to,
+          subject,
+          html,
+        });
+      } catch (err) {
+        app.log.error({ err }, "Gmail SMTP error");
         return reply.code(502).send({ message: "שליחת המייל נכשלה — נסה שוב" });
       }
 

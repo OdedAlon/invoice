@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import bcrypt from "bcryptjs";
 import { createHash, randomBytes } from "node:crypto";
 import { prisma } from "@invoice/db";
+import nodemailer from "nodemailer";
 
 const BCRYPT_ROUNDS = 12;
 const JWT_EXPIRY = "8h";
@@ -182,25 +183,39 @@ export async function registerAuthRoutes(app: FastifyInstance) {
         const appUrl = process.env.APP_URL ?? "http://localhost:5173";
         const resetLink = `${appUrl}?reset_token=${rawToken}`;
 
-        const resendKey = process.env.RESEND_API_KEY;
+        const gmailUser = process.env.GMAIL_USER;
+        const gmailPass = process.env.GMAIL_APP_PASSWORD;
+      
+        if (!gmailUser || !gmailPass) {
+          app.log.warn("GMAIL_USER or GMAIL_APP_PASSWORD not set — email sending disabled");
+          return;
+        }
+      
+        const transporter = nodemailer.createTransport({
+          host: "smtp.gmail.com",
+          port: 587,
+          secure: false, // STARTTLS
+          auth: {
+            user: gmailUser,
+            pass: gmailPass, // Gmail App Password (not your account password)
+          },
+        });
         const from = process.env.RESEND_FROM ?? "onboarding@resend.dev";
 
-        if (resendKey) {
-          const { Resend } = await import("resend");
-          const resend = new Resend(resendKey);
-          await resend.emails.send({
-            from,
-            to: user.email,
-            subject: "איפוס סיסמה — חשבונית IL",
-            html: buildResetEmailHtml(user.displayName, resetLink)
-          });
-        } else {
-          // Dev fallback — log the link
-          app.log.info({ resetLink }, "Password reset link (RESEND_API_KEY not set)");
-        }
+        try {
+        await transporter.sendMail({
+          from,
+          to: user.email,
+          subject: "איפוס סיסמה — חשבונית IL",
+          html: buildResetEmailHtml(user.displayName, resetLink)
+        });
+      } catch (err) {
+        app.log.error({ err }, "Gmail SMTP error");
+        return reply.code(502).send({ message: "שליחת המייל נכשלה — נסה שוב" });
       }
 
       return reply.send({ ok: true });
+      }
     }
   });
 
