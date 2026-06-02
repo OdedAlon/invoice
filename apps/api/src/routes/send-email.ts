@@ -25,10 +25,14 @@ export async function registerSendEmailRoutes(app: FastifyInstance) {
     host: "smtp.gmail.com",
     port: 587,
     secure: false, // STARTTLS
+    family: 4,
     auth: {
       user: gmailUser,
       pass: gmailPass, // Gmail App Password (not your account password)
     },
+    tls: {
+      rejectUnauthorized: false // עוזר למנוע בעיות תעודה (Certificates) מסוימות בענן
+    }
   });
 
   app.post<{ Params: SendEmailParams; Body: SendEmailBody }>(

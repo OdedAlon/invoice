@@ -195,16 +195,16 @@ export async function registerAuthRoutes(app: FastifyInstance) {
           host: "smtp.gmail.com",
           port: 587,
           secure: false, // STARTTLS
+          family: 4,
           auth: {
             user: gmailUser,
             pass: gmailPass, // Gmail App Password (not your account password)
           },
         });
-        const from = process.env.RESEND_FROM ?? "onboarding@resend.dev";
 
         try {
         await transporter.sendMail({
-          from,
+          from: `חשבונית IL <${gmailUser}>`,
           to: user.email,
           subject: "איפוס סיסמה — חשבונית IL",
           html: buildResetEmailHtml(user.displayName, resetLink)
