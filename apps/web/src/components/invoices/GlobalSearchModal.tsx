@@ -50,7 +50,7 @@ export function GlobalSearchModal({
             value={query}
             onChange={(e) => onQueryChange(e.target.value)}
           />
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600" aria-label="סגירה">
             <X className="h-4 w-4" />
           </button>
         </div>

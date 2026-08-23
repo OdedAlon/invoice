@@ -10,6 +10,19 @@ export class ApiError extends Error {
   }
 }
 
+// Lets AuthGate react when a session expires mid-use (e.g. the 8h JWT cookie
+// lapses) so the app can drop back to the login screen instead of just
+// showing a generic error toast forever. Only wired up for the typed
+// apiGet/Post/Put/Patch/Delete helpers below — raw apiFetch call sites (the
+// login/register/reset-password screens themselves) intentionally bypass
+// this, since a 401 there is an expected login-form outcome, not a
+// session-expiry event.
+let onUnauthorized: (() => void) | null = null;
+
+export function setUnauthorizedHandler(handler: (() => void) | null) {
+  onUnauthorized = handler;
+}
+
 type JsonBody = Record<string, unknown> | unknown[];
 
 /**
@@ -34,6 +47,9 @@ async function request<T>(path: string, init: RequestInit, fallbackError: string
   const response = await apiFetch(path, init);
 
   if (!response.ok) {
+    if (response.status === 401) {
+      onUnauthorized?.();
+    }
     throw new ApiError(await parseErrorMessage(response, fallbackError), response.status);
   }
 

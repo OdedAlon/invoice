@@ -160,8 +160,6 @@ model Invoice {
   children       Invoice[]      @relation("LinkedInvoice")
   issuedAt       DateTime?
   cancelledAt    DateTime?
-  hashPrev       String?
-  hashSelf       String?
   createdByUserId String
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt

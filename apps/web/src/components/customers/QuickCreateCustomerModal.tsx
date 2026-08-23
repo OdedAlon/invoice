@@ -31,7 +31,7 @@ export function QuickCreateCustomerModal({
       <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl dark:bg-slate-800" onClick={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-center justify-between">
           <h2 className="font-semibold">לקוח חדש</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="h-4 w-4" /></button>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600" aria-label="סגירה"><X className="h-4 w-4" /></button>
         </div>
         <div className="space-y-3">
           <Field label="שם לקוח *">

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import App from "./App";
-import { apiFetch, apiPost } from "@/lib/api";
+import { apiFetch, apiPost, setUnauthorizedHandler } from "@/lib/api";
 
 type AuthUser = { id: string; email: string; displayName: string };
 
@@ -123,7 +123,7 @@ function ResetPasswordScreen({ token, onDone }: { token: string; onDone: () => v
 
 // ─── Auth Screen (login / register / forgot) ──────────────────────────────────
 
-function AuthScreen({ onAuth }: { onAuth: (user: AuthUser) => void }) {
+function AuthScreen({ onAuth, sessionExpired }: { onAuth: (user: AuthUser) => void; sessionExpired: boolean }) {
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -190,6 +190,12 @@ function AuthScreen({ onAuth }: { onAuth: (user: AuthUser) => void }) {
         </div>
 
         <div className="rounded-[28px] bg-white p-8 shadow-sm shadow-slate-200 dark:bg-slate-800 dark:shadow-slate-950">
+
+          {sessionExpired && mode === "login" ? (
+            <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              ההתחברות שלך פגה — יש להתחבר מחדש.
+            </div>
+          ) : null}
 
           {/* Tab bar — only for login/register */}
           {mode !== "forgot" && (
@@ -339,6 +345,7 @@ export default function AuthGate() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [checking, setChecking] = useState(true);
   const [resetToken, setResetToken] = useState<string | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
 
   useEffect(() => {
     // Check URL for reset token before checking session
@@ -356,6 +363,17 @@ export default function AuthGate() {
       })
       .catch(() => {})
       .finally(() => setChecking(false));
+  }, []);
+
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      setUser((current) => {
+        if (!current) return current; // not logged in yet — not a session-expiry event
+        setSessionExpired(true);
+        return null;
+      });
+    });
+    return () => setUnauthorizedHandler(null);
   }, []);
 
   async function handleLogout() {
@@ -376,7 +394,7 @@ export default function AuthGate() {
   }
 
   if (!user) {
-    return <AuthScreen onAuth={setUser} />;
+    return <AuthScreen onAuth={(u) => { setSessionExpired(false); setUser(u); }} sessionExpired={sessionExpired} />;
   }
 
   return <App user={user} onLogout={handleLogout} />;
