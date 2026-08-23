@@ -5,6 +5,7 @@ services:
     runtime: node
     buildCommand: >-
       pnpm install --frozen-lockfile &&
+      pnpm --filter @invoice/api exec puppeteer browsers install chrome &&
       pnpm --filter @invoice/db run build &&
       pnpm --filter @invoice/shared run build &&
       pnpm --filter @invoice/web run build &&
