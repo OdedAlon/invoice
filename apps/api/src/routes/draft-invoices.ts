@@ -4,27 +4,19 @@ import { DocumentType, PaymentMethod, getDocumentTypeLabel } from "@invoice/shar
 import { createCreditNote, createReturnNote, createDraftInvoice, getInvoiceForExport, issueDraftInvoice, listCustomers, listDraftInvoices, listIssuedInvoices } from "../data/prisma-store.js";
 import { buildInvoiceHtml } from "../lib/invoice-html.js";
 import { prisma } from "@invoice/db";
-import puppeteerCore, { type Browser } from "puppeteer-core";
-import chromium from "@sparticuz/chromium";
+import puppeteer, { type Browser } from "puppeteer";
 
 let _browser: Browser | null = null;
 async function getBrowser(): Promise<Browser> {
   if (_browser && _browser.connected) return _browser;
-  const isProd = process.env.NODE_ENV === "production";
-  if (isProd) {
-    const executablePath = await chromium.executablePath();
-    _browser = await puppeteerCore.launch({
-      executablePath,
-      args: chromium.args,
-      headless: true,
-    });
-  } else {
-    // Local dev: use system Chrome or puppeteer's bundled one
-    const localPuppeteer = await import("puppeteer");
-    _browser = await localPuppeteer.default.launch({
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-    }) as unknown as Browser;
-  }
+  // Render runs this as a normal persistent container (not AWS Lambda), so
+  // puppeteer's own bundled Chromium works fine in production too — no need
+  // for the Lambda-oriented puppeteer-core + @sparticuz/chromium combo,
+  // which was solving a filesystem/size constraint this deployment doesn't
+  // have while still shipping a second Chromium binary alongside this one.
+  _browser = await puppeteer.launch({
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+  });
   return _browser;
 }
 
@@ -269,8 +261,8 @@ export async function registerDraftInvoiceRoutes(app: FastifyInstance) {
       return reply.code(400).send({ message: "סוג מסמך לא תקין" });
     }
 
-    if (!Array.isArray(body.lines) || body.lines.length === 0) {
-      return reply.code(400).send({ message: "יש להזין לפחות שורת חיוב אחת" });
+    if (!Array.isArray(body.lines) || body.lines.length === 0 || body.lines.length > 200) {
+      return reply.code(400).send({ message: "מספר שורות המסמך אינו תקין" });
     }
 
     const payment = body.payment;
@@ -292,15 +284,23 @@ export async function registerDraftInvoiceRoutes(app: FastifyInstance) {
       }
     }
 
+    const MAX_LINE_AMOUNT = 100_000_000;
+
     const invalidLine = body.lines.find((line) => {
       return (
         !line.descriptionHe?.trim() ||
+        line.descriptionHe.length > 500 ||
         !line.quantity ||
+        !Number.isFinite(line.quantity) ||
         line.quantity <= 0 ||
         line.unitPrice === undefined ||
+        !Number.isFinite(line.unitPrice) ||
         line.unitPrice < 0 ||
+        line.unitPrice > MAX_LINE_AMOUNT ||
         line.vatRate === undefined ||
-        line.vatRate < 0
+        !Number.isFinite(line.vatRate) ||
+        line.vatRate < 0 ||
+        line.vatRate > 100
       );
     });
 
@@ -395,7 +395,52 @@ export async function registerDraftInvoiceRoutes(app: FastifyInstance) {
 
     if (!body.customerId) return reply.code(400).send({ message: "יש לבחור לקוח" });
     if (!body.issueDate) return reply.code(400).send({ message: "תאריך מסמך הוא שדה חובה" });
-    if (!Array.isArray(body.lines) || body.lines.length === 0) return reply.code(400).send({ message: "יש להזין לפחות שורת חיוב אחת" });
+    if (!Array.isArray(body.lines) || body.lines.length === 0 || body.lines.length > 200) {
+      return reply.code(400).send({ message: "מספר שורות המסמך אינו תקין" });
+    }
+
+    const payment = body.payment;
+
+    if (payment?.method && !Object.values(PaymentMethod).includes(payment.method)) {
+      return reply.code(400).send({ message: "אמצעי תשלום לא תקין" });
+    }
+
+    const receiptLikeDocument =
+      existing.documentType === DocumentType.RECEIPT || existing.documentType === DocumentType.INVOICE_RECEIPT;
+
+    if (receiptLikeDocument) {
+      if (!payment?.method) {
+        return reply.code(400).send({ message: "בקבלה חובה לבחור אמצעי תשלום" });
+      }
+
+      if (!validatePaymentDetails(payment.method, payment.details)) {
+        return reply.code(400).send({ message: "יש להשלים פרטי תשלום מתאימים עבור הקבלה" });
+      }
+    }
+
+    const MAX_LINE_AMOUNT = 100_000_000;
+
+    const invalidLine = body.lines.find((line) => {
+      return (
+        !line.descriptionHe?.trim() ||
+        line.descriptionHe.length > 500 ||
+        !line.quantity ||
+        !Number.isFinite(line.quantity) ||
+        line.quantity <= 0 ||
+        line.unitPrice === undefined ||
+        !Number.isFinite(line.unitPrice) ||
+        line.unitPrice < 0 ||
+        line.unitPrice > MAX_LINE_AMOUNT ||
+        line.vatRate === undefined ||
+        !Number.isFinite(line.vatRate) ||
+        line.vatRate < 0 ||
+        line.vatRate > 100
+      );
+    });
+
+    if (invalidLine) {
+      return reply.code(400).send({ message: "אחת משורות המסמך אינה תקינה" });
+    }
 
     const { calculateDraftInvoice: calcInvoice } = await import("@invoice/shared");
     const lines = body.lines.map((line) => ({
@@ -415,22 +460,22 @@ export async function registerDraftInvoiceRoutes(app: FastifyInstance) {
           issueDate: new Date(body.issueDate!),
           dueDate: body.dueDate ? new Date(body.dueDate) : null,
           notesHe: body.notesHe ?? null,
-          paymentMethod: body.payment?.method ?? null,
-          paymentDetails: body.payment?.details ?? null,
+          paymentMethod: payment?.method ?? null,
+          paymentDetails: payment?.method ? normalizePaymentDetails(payment.details) ?? null : null,
           subtotalAmount: calc.subtotalAmount,
           vatAmount: calc.vatAmount,
           totalAmount: calc.totalAmount,
           balanceDue: calc.totalAmount,
           lines: {
-            create: lines.map((line, idx) => ({
+            create: calc.lines.map((line, idx) => ({
               lineNo: idx + 1,
               descriptionHe: line.descriptionHe,
               quantity: line.quantity,
               unitPrice: line.unitPrice,
               vatRate: line.vatRate,
-              lineSubtotal: line.quantity * line.unitPrice,
-              lineVatAmount: line.quantity * line.unitPrice * (line.vatRate / 100),
-              lineTotal: line.quantity * line.unitPrice * (1 + line.vatRate / 100)
+              lineSubtotal: line.lineSubtotal,
+              lineVatAmount: line.lineVatAmount,
+              lineTotal: line.lineTotal
             }))
           }
         }

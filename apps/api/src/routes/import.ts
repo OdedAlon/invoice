@@ -6,6 +6,15 @@ function getUserId(request: { user: unknown }): string {
   return (request.user as { sub: string }).sub;
 }
 
+const MAX_IMPORT_RECORDS = 20_000;
+
+// Keeps only entries that are plain objects (rejects null/arrays/primitives
+// before they ever reach importData, which otherwise treats every array
+// element as `any`).
+function keepPlainObjects(items: unknown[]): unknown[] {
+  return items.filter((item) => typeof item === "object" && item !== null && !Array.isArray(item));
+}
+
 export async function registerImportRoutes(app: FastifyInstance) {
   app.post("/v1/import/full", async (request, reply) => {
     const body = request.body as Buffer | undefined;
@@ -42,6 +51,13 @@ export async function registerImportRoutes(app: FastifyInstance) {
         message: "לא נמצאו customers.json או invoices.json ב-ZIP — ייתכן שהקובץ לא מתאים לפורמט הייצוא"
       });
     }
+
+    if (rawCustomers.length > MAX_IMPORT_RECORDS || rawInvoices.length > MAX_IMPORT_RECORDS) {
+      return reply.code(400).send({ message: "מספר הרשומות בקובץ חורג מהמותר" });
+    }
+
+    rawCustomers = keepPlainObjects(rawCustomers);
+    rawInvoices = keepPlainObjects(rawInvoices);
 
     const result = await importData(getUserId(request), rawCustomers, rawInvoices);
 

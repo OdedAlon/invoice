@@ -37,16 +37,21 @@ export async function registerExpenseRoutes(app: FastifyInstance) {
 
     const body = request.body as { date?: string; category?: string; amount?: number; notes?: string };
 
-    if (!body.date || !body.category || typeof body.amount !== "number" || body.amount <= 0) {
+    const isValidDate = typeof body.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.date);
+    const isValidCategory = typeof body.category === "string" && body.category.trim().length > 0 && body.category.length <= 100;
+    const isValidAmount = typeof body.amount === "number" && Number.isFinite(body.amount) && body.amount > 0 && body.amount <= 100_000_000;
+    const isValidNotes = body.notes === undefined || (typeof body.notes === "string" && body.notes.length <= 1000);
+
+    if (!isValidDate || !isValidCategory || !isValidAmount || !isValidNotes) {
       return reply.code(400).send({ message: "פרטי הוצאה לא תקינים" });
     }
 
     const expense = await prisma.expense.create({
       data: {
         businessId,
-        date: body.date,
-        category: body.category.trim(),
-        amount: body.amount,
+        date: body.date!,
+        category: body.category!.trim(),
+        amount: body.amount!,
         notes: body.notes?.trim() || null,
       },
     });

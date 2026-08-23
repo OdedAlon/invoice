@@ -771,6 +771,17 @@ export async function importData(
   for (const raw of rawCustomers) {
     const c = raw as any;
     if (!c.id || !c.displayNameHe) continue;
+
+    // An id in the import file might collide with an existing row owned by a
+    // DIFFERENT business (e.g. a crafted import, or two exports sharing an id
+    // by coincidence). Upserting on id alone would silently reassign that
+    // row to the importing user's own business — a cross-tenant takeover.
+    // Skip rather than upsert whenever the existing owner doesn't match.
+    const existingOwner = await prisma.customer.findUnique({ where: { id: c.id }, select: { businessId: true } });
+    if (existingOwner && existingOwner.businessId !== context.businessId) {
+      continue;
+    }
+
     const customerData = {
       businessId: context.businessId,
       displayNameHe: String(c.displayNameHe),
@@ -800,6 +811,25 @@ export async function importData(
   for (const raw of rawInvoices) {
     const inv = raw as any;
     if (!inv.id || !inv.documentType || !inv.customerId || !inv.issueDate) continue;
+
+    // Same cross-tenant concern as customers above: reject if this id
+    // already belongs to another business, or if customerId references a
+    // customer belonging to another business (which would otherwise let
+    // this business's exported invoice silently join and expose that
+    // other business's customer PII via the customer relation).
+    const [existingInvoiceOwner, customerOwner] = await Promise.all([
+      prisma.invoice.findUnique({ where: { id: inv.id }, select: { businessId: true } }),
+      prisma.customer.findUnique({ where: { id: inv.customerId }, select: { businessId: true } })
+    ]);
+    if (existingInvoiceOwner && existingInvoiceOwner.businessId !== context.businessId) {
+      skippedInvoices++;
+      continue;
+    }
+    if (!customerOwner || customerOwner.businessId !== context.businessId) {
+      skippedInvoices++;
+      continue;
+    }
+
     const invoiceData = {
       businessId: context.businessId,
       customerId: inv.customerId,
