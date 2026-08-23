@@ -199,29 +199,76 @@ export type UpdateBusinessSettingsInput = {
   printTemplate?: PrintTemplateConfig;
 };
 
-const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+// quantity has up to 3 decimal places (matches Invoice.quantity Decimal(12,3));
+// unitPrice and vatRate have up to 2 (matches Decimal(12,2) / Decimal(5,2)).
+const QUANTITY_SCALE = 1000n;
+const MONEY_SCALE = 100n;
+const PERCENT_SCALE = 100n;
 
+// Recovers the exact scaled integer for a single INPUT value (not an
+// intermediate product) from its decimal string representation, e.g.
+// toScaledInt(6.5, 100) -> 650n. Safe because it's only ever applied to raw
+// user-entered numbers, never to the result of a prior float multiplication.
+function toScaledInt(value: number, scale: bigint): bigint {
+  return BigInt(Math.round(value * Number(scale)));
+}
+
+// Rounds a fraction to the nearest integer, half away from zero, using
+// exact integer arithmetic — no float division is involved.
+function divRoundHalfAwayFromZero(numerator: bigint, denominator: bigint): bigint {
+  const sign = numerator < 0n ? -1n : 1n;
+  const abs = numerator < 0n ? -numerator : numerator;
+  const quotient = abs / denominator;
+  const remainder = abs % denominator;
+  return sign * (remainder * 2n >= denominator ? quotient + 1n : quotient);
+}
+
+function centsToMoney(cents: bigint): number {
+  return Number(cents) / 100;
+}
+
+/**
+ * All money math here runs on scaled integers (effectively fixed-point
+ * cents), not floats. Rounding `quantity * unitPrice` via plain
+ * floating-point multiplication (e.g. `Math.round(value * 100) / 100`) can
+ * silently drift by a cent — IEEE-754 double multiplication of two
+ * non-power-of-2 decimals doesn't reproduce the exact decimal product (e.g.
+ * `6.5 * 78.41` evaluates to 509.66499999999996, not the true 509.665,
+ * causing "round half up" to round the wrong way) — no amount of patching
+ * the rounding step afterward fixes that, since the drift already happened
+ * during the multiplication itself.
+ */
 export function calculateDraftInvoice(lines: DraftInvoiceLineInput[]) {
+  let subtotalCents = 0n;
+  let vatCents = 0n;
+
   const normalizedLines = lines.map((line) => {
-    const lineSubtotal = roundMoney(line.quantity * line.unitPrice);
-    const lineVatAmount = roundMoney(lineSubtotal * (line.vatRate / 100));
-    const lineTotal = roundMoney(lineSubtotal + lineVatAmount);
+    const quantityScaled = toScaledInt(line.quantity, QUANTITY_SCALE);
+    const unitPriceCents = toScaledInt(line.unitPrice, MONEY_SCALE);
+    const vatRateScaled = toScaledInt(line.vatRate, PERCENT_SCALE);
+
+    // quantityScaled * unitPriceCents = subtotal * QUANTITY_SCALE * MONEY_SCALE;
+    // divide by QUANTITY_SCALE to land on subtotal * MONEY_SCALE (i.e. cents).
+    const lineSubtotalCents = divRoundHalfAwayFromZero(quantityScaled * unitPriceCents, QUANTITY_SCALE);
+    // lineSubtotalCents * vatRateScaled = vatAmount * MONEY_SCALE * MONEY_SCALE * PERCENT_SCALE-as-fraction;
+    // divide by (MONEY_SCALE * PERCENT_SCALE) to land back on vatAmount * MONEY_SCALE.
+    const lineVatCents = divRoundHalfAwayFromZero(lineSubtotalCents * vatRateScaled, MONEY_SCALE * PERCENT_SCALE);
+    const lineTotalCents = lineSubtotalCents + lineVatCents;
+
+    subtotalCents += lineSubtotalCents;
+    vatCents += lineVatCents;
 
     return {
       ...line,
-      lineSubtotal,
-      lineVatAmount,
-      lineTotal
+      lineSubtotal: centsToMoney(lineSubtotalCents),
+      lineVatAmount: centsToMoney(lineVatCents),
+      lineTotal: centsToMoney(lineTotalCents)
     };
   });
 
-  const subtotalAmount = roundMoney(
-    normalizedLines.reduce((sum, line) => sum + line.lineSubtotal, 0)
-  );
-  const vatAmount = roundMoney(
-    normalizedLines.reduce((sum, line) => sum + line.lineVatAmount, 0)
-  );
-  const totalAmount = roundMoney(subtotalAmount + vatAmount);
+  const subtotalAmount = centsToMoney(subtotalCents);
+  const vatAmount = centsToMoney(vatCents);
+  const totalAmount = centsToMoney(subtotalCents + vatCents);
 
   return {
     lines: normalizedLines,
