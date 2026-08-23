@@ -70,8 +70,11 @@ export function IssuedList({
 }) {
   const [issuedSort, setIssuedSort] = useState("date-desc");
   const [markingPaidId, setMarkingPaidId] = useState<string | null>(null);
-  const [whatsappPreparingId, setWhatsappPreparingId] = useState<string | null>(null);
-  const [whatsappReadyShare, setWhatsappReadyShare] = useState<{ invoiceId: string; file: File } | null>(null);
+  const [whatsappShare, setWhatsappShare] = useState<
+    | { invoiceId: string; status: "preparing" }
+    | { invoiceId: string; status: "ready"; file: File }
+    | null
+  >(null);
 
   const filteredIssuedByType = useMemo(
     () => issuedInvoices.filter((inv) => inv.documentType === selectedDocumentType),
@@ -146,39 +149,40 @@ export function IssuedList({
     window.open("https://web.whatsapp.com", "_blank", "noopener,noreferrer");
   }
 
-  // Step 1: fetch the PDF (async — this is where the click's user-activation
-  // window can expire before we'd get a chance to call navigator.share()).
-  // If native sharing isn't possible at all, skip straight to the fallback
-  // instead of asking for a pointless second click.
-  async function prepareWhatsAppShare(invoiceId: string) {
-    setWhatsappPreparingId(invoiceId);
+  // Opens the share modal and fetches the PDF (async — this is where the
+  // click's user-activation window would expire if we tried to call
+  // navigator.share() right after). If native file sharing isn't possible
+  // at all, skip straight to the fallback instead of showing a "Send"
+  // button that would never work.
+  async function openWhatsAppShare(invoiceId: string) {
+    setWhatsappShare({ invoiceId, status: "preparing" });
     let blob: Blob;
     let filename = `invoice-${invoiceId}.pdf`;
     try {
       const res = await apiFetch(`/v1/invoices/${invoiceId}/export-pdf`);
-      if (!res.ok) { toast("שגיאה בייצוא PDF", "error"); return; }
+      if (!res.ok) { toast("שגיאה בייצוא PDF", "error"); setWhatsappShare(null); return; }
       blob = await res.blob();
       filename = res.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] ?? filename;
     } catch {
       toast("שגיאת רשת — לא ניתן לייצא PDF", "error");
+      setWhatsappShare(null);
       return;
-    } finally {
-      setWhatsappPreparingId(null);
     }
 
     const file = new File([blob], filename, { type: "application/pdf" });
 
     if (typeof navigator.canShare === "function" && navigator.canShare({ files: [file] })) {
-      // Wait for a fresh click on the "Send" button so the share() call
-      // below still has valid user-activation, no matter how long the
+      // Wait for a fresh click on the modal's "Send" button so the share()
+      // call below still has valid user-activation, no matter how long the
       // PDF took to render.
-      setWhatsappReadyShare({ invoiceId, file });
+      setWhatsappShare({ invoiceId, status: "ready", file });
     } else {
       downloadAndOpenWhatsAppWeb(blob, filename);
+      setWhatsappShare(null);
     }
   }
 
-  // Step 2: called synchronously from the "Send" button's own click handler.
+  // Called synchronously from the modal's "Send" button click handler.
   async function sendWhatsAppShare(file: File) {
     try {
       await navigator.share({ files: [file], title: "חשבונית", text: "הינה החשבונית שלך" });
@@ -188,7 +192,7 @@ export function IssuedList({
         downloadAndOpenWhatsAppWeb(file, file.name);
       }
     } finally {
-      setWhatsappReadyShare(null);
+      setWhatsappShare(null);
     }
   }
 
@@ -276,6 +280,7 @@ export function IssuedList({
   }
 
   return (
+    <>
     <Panel id="issued-panel" title={`מסמכי ${selectedDocumentLabel} שהונפקו`} description="מסמכים סופיים עם מספר רץ ותצוגת הדפסה.">
       <div className="space-y-3">
         <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 xl:grid-cols-5">
@@ -436,25 +441,12 @@ export function IssuedList({
                   </a>
                 ) : null}
                 <button
-                  className="flex items-center gap-1.5 rounded-xl border border-green-300 bg-green-50 px-3 py-2 text-xs font-medium text-green-700 hover:bg-green-100 disabled:opacity-60"
-                  title={
-                    whatsappReadyShare?.invoiceId === invoice.id
-                      ? "פתיחת חלון השיתוף של המכשיר"
-                      : "מייצא PDF ושולח דרך WhatsApp (במחשב — הקובץ יורד, ולאחר מכן יפתח WhatsApp Web לצירוף ידני)"
-                  }
-                  onClick={() =>
-                    whatsappReadyShare?.invoiceId === invoice.id
-                      ? sendWhatsAppShare(whatsappReadyShare.file)
-                      : prepareWhatsAppShare(invoice.id)
-                  }
-                  disabled={whatsappPreparingId === invoice.id}
+                  className="flex items-center gap-1.5 rounded-xl border border-green-300 bg-green-50 px-3 py-2 text-xs font-medium text-green-700 hover:bg-green-100"
+                  title="מייצא PDF ושולח דרך WhatsApp (במחשב — הקובץ יורד, ולאחר מכן יפתח WhatsApp Web לצירוף ידני)"
+                  onClick={() => openWhatsAppShare(invoice.id)}
                 >
                   <Share2 className="h-3.5 w-3.5" />
-                  {whatsappPreparingId === invoice.id
-                    ? "מכין..."
-                    : whatsappReadyShare?.invoiceId === invoice.id
-                    ? "שליחה"
-                    : "WhatsApp"}
+                  WhatsApp
                 </button>
                 {invoice.status !== DocumentStatus.CANCELLED &&
                   invoice.documentType !== DocumentType.CREDIT_NOTE &&
@@ -524,5 +516,42 @@ export function IssuedList({
         </div>{/* end scrollable list */}
       </div>
     </Panel>
+
+    {whatsappShare ? (
+      <div
+        className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/60 px-4"
+        onClick={() => setWhatsappShare(null)}
+      >
+        <div
+          className="w-full max-w-sm rounded-2xl bg-white p-6 text-center shadow-2xl dark:bg-slate-800"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {whatsappShare.status === "preparing" ? (
+            <>
+              <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-emerald-600" />
+              <p className="text-sm text-slate-600 dark:text-slate-300">מכין את הקובץ לשליחה...</p>
+            </>
+          ) : (
+            <>
+              <Share2 className="mx-auto mb-3 h-8 w-8 text-emerald-600" />
+              <p className="mb-4 text-sm text-slate-600 dark:text-slate-300">הקובץ מוכן לשליחה</p>
+              <button
+                className="w-full rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                onClick={() => sendWhatsAppShare(whatsappShare.file)}
+              >
+                שליחה
+              </button>
+            </>
+          )}
+          <button
+            className="mt-3 w-full rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200"
+            onClick={() => setWhatsappShare(null)}
+          >
+            ביטול
+          </button>
+        </div>
+      </div>
+    ) : null}
+    </>
   );
 }
