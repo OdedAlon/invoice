@@ -80,20 +80,17 @@ async function assignSequenceNumber(
   const seqKey = {
     businessId_documentType_fiscalYear: { businessId, documentType, fiscalYear }
   };
-  const seq = await tx.documentSequence.findUnique({ where: seqKey });
-  const startingNumber = seq?.startingNumber ?? 1;
-  const nextNumber = seq?.nextNumber ?? startingNumber;
-  const prefix = seq?.prefix ?? "";
+  const startingNumber = 1;
 
-  if (seq) {
-    await tx.documentSequence.update({ where: seqKey, data: { nextNumber: { increment: 1 } } });
-  } else {
-    await tx.documentSequence.create({
-      data: { businessId, documentType, fiscalYear, prefix, startingNumber, nextNumber: startingNumber + 1 }
-    });
-  }
+  // Atomic upsert (INSERT ... ON CONFLICT DO UPDATE on Postgres) so concurrent
+  // invoice creations can't both read the same nextNumber before either commits.
+  const updated = await tx.documentSequence.upsert({
+    where: seqKey,
+    update: { nextNumber: { increment: 1 } },
+    create: { businessId, documentType, fiscalYear, prefix: "", startingNumber, nextNumber: startingNumber + 1 }
+  });
 
-  return { nextNumber, prefix };
+  return { nextNumber: updated.nextNumber - 1, prefix: updated.prefix };
 }
 
 function mapCustomer(customer: {

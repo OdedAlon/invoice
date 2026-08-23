@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import App from "./App";
-
-const API_URL = import.meta.env.VITE_API_URL ?? "";
+import { apiFetch, apiPost } from "@/lib/api";
 
 type AuthUser = { id: string; email: string; displayName: string };
 
@@ -32,14 +31,7 @@ function ResetPasswordScreen({ token, onDone }: { token: string; onDone: () => v
 
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/auth/reset-password`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, newPassword })
-      });
-
-      const data = (await res.json()) as { message?: string };
-      if (!res.ok) throw new Error(data.message ?? "שגיאה באיפוס הסיסמה");
+      await apiPost("/auth/reset-password", { token, newPassword }, "שגיאה באיפוס הסיסמה");
 
       setSuccess(true);
       // Remove token from URL without page reload
@@ -147,15 +139,7 @@ function AuthScreen({ onAuth }: { onAuth: (user: AuthUser) => void }) {
 
     try {
       if (mode === "forgot") {
-        const res = await fetch(`${API_URL}/auth/forgot-password`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email })
-        });
-        if (!res.ok) {
-          const d = (await res.json()) as { message?: string };
-          throw new Error(d.message ?? "שגיאה");
-        }
+        await apiPost("/auth/forgot-password", { email }, "שגיאה");
         setForgotSuccess(true);
         return;
       }
@@ -168,10 +152,9 @@ function AuthScreen({ onAuth }: { onAuth: (user: AuthUser) => void }) {
         ? { email, password }
         : { email, password, displayName };
 
-      const res = await fetch(`${API_URL}/auth/${mode}`, {
+      const res = await apiFetch(`/auth/${mode}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify(body)
       });
 
@@ -367,7 +350,7 @@ export default function AuthGate() {
       return;
     }
 
-    fetch(`${API_URL}/auth/me`, { credentials: "include" })
+    apiFetch("/auth/me")
       .then(async (res) => {
         if (res.ok) setUser((await res.json()) as AuthUser);
       })
@@ -376,7 +359,7 @@ export default function AuthGate() {
   }, []);
 
   async function handleLogout() {
-    await fetch(`${API_URL}/auth/logout`, { method: "POST", credentials: "include" });
+    await apiFetch("/auth/logout", { method: "POST" });
     setUser(null);
   }
 

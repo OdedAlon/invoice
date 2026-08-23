@@ -195,7 +195,6 @@ export async function registerAuthRoutes(app: FastifyInstance) {
           host: "smtp.gmail.com",
           port: 587,
           secure: false, // STARTTLS
-          family: 4,
           auth: {
             user: gmailUser,
             pass: gmailPass, // Gmail App Password (not your account password)
