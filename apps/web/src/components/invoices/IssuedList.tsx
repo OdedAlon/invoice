@@ -70,6 +70,8 @@ export function IssuedList({
 }) {
   const [issuedSort, setIssuedSort] = useState("date-desc");
   const [markingPaidId, setMarkingPaidId] = useState<string | null>(null);
+  const [whatsappPreparingId, setWhatsappPreparingId] = useState<string | null>(null);
+  const [whatsappReadyShare, setWhatsappReadyShare] = useState<{ invoiceId: string; file: File } | null>(null);
 
   const filteredIssuedByType = useMemo(
     () => issuedInvoices.filter((inv) => inv.documentType === selectedDocumentType),
@@ -134,8 +136,23 @@ export function IssuedList({
     }
   }
 
-  async function shareViaWhatsApp(invoiceId: string) {
-    let blob: Blob | null = null;
+  function downloadAndOpenWhatsAppWeb(blob: Blob, filename: string) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+    window.open("https://web.whatsapp.com", "_blank", "noopener,noreferrer");
+  }
+
+  // Step 1: fetch the PDF (async — this is where the click's user-activation
+  // window can expire before we'd get a chance to call navigator.share()).
+  // If native sharing isn't possible at all, skip straight to the fallback
+  // instead of asking for a pointless second click.
+  async function prepareWhatsAppShare(invoiceId: string) {
+    setWhatsappPreparingId(invoiceId);
+    let blob: Blob;
     let filename = `invoice-${invoiceId}.pdf`;
     try {
       const res = await apiFetch(`/v1/invoices/${invoiceId}/export-pdf`);
@@ -145,31 +162,33 @@ export function IssuedList({
     } catch {
       toast("שגיאת רשת — לא ניתן לייצא PDF", "error");
       return;
+    } finally {
+      setWhatsappPreparingId(null);
     }
 
     const file = new File([blob], filename, { type: "application/pdf" });
-    let shared = false;
 
-    // Mobile: use native share sheet
     if (typeof navigator.canShare === "function" && navigator.canShare({ files: [file] })) {
-      try {
-        await navigator.share({ files: [file], title: "חשבונית", text: "הינה החשבונית שלך" });
-        shared = true;
-      } catch (err) {
-        if (err instanceof Error && err.name === "AbortError") return; // user cancelled
-        // share failed — fall through to desktop fallback
-      }
+      // Wait for a fresh click on the "Send" button so the share() call
+      // below still has valid user-activation, no matter how long the
+      // PDF took to render.
+      setWhatsappReadyShare({ invoiceId, file });
+    } else {
+      downloadAndOpenWhatsAppWeb(blob, filename);
     }
+  }
 
-    // Desktop fallback: download PDF + open WhatsApp Web
-    if (!shared) {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
-      window.open("https://web.whatsapp.com", "_blank", "noopener,noreferrer");
+  // Step 2: called synchronously from the "Send" button's own click handler.
+  async function sendWhatsAppShare(file: File) {
+    try {
+      await navigator.share({ files: [file], title: "חשבונית", text: "הינה החשבונית שלך" });
+    } catch (err) {
+      if (!(err instanceof Error && err.name === "AbortError")) {
+        // share failed even with fresh activation — fall back to download.
+        downloadAndOpenWhatsAppWeb(file, file.name);
+      }
+    } finally {
+      setWhatsappReadyShare(null);
     }
   }
 
@@ -417,12 +436,25 @@ export function IssuedList({
                   </a>
                 ) : null}
                 <button
-                  className="flex items-center gap-1.5 rounded-xl border border-green-300 bg-green-50 px-3 py-2 text-xs font-medium text-green-700 hover:bg-green-100"
-                  title="מייצא PDF ושולח דרך WhatsApp (במחשב — הקובץ יורד, ולאחר מכן יפתח WhatsApp Web לצירוף ידני)"
-                  onClick={() => shareViaWhatsApp(invoice.id)}
+                  className="flex items-center gap-1.5 rounded-xl border border-green-300 bg-green-50 px-3 py-2 text-xs font-medium text-green-700 hover:bg-green-100 disabled:opacity-60"
+                  title={
+                    whatsappReadyShare?.invoiceId === invoice.id
+                      ? "פתיחת חלון השיתוף של המכשיר"
+                      : "מייצא PDF ושולח דרך WhatsApp (במחשב — הקובץ יורד, ולאחר מכן יפתח WhatsApp Web לצירוף ידני)"
+                  }
+                  onClick={() =>
+                    whatsappReadyShare?.invoiceId === invoice.id
+                      ? sendWhatsAppShare(whatsappReadyShare.file)
+                      : prepareWhatsAppShare(invoice.id)
+                  }
+                  disabled={whatsappPreparingId === invoice.id}
                 >
                   <Share2 className="h-3.5 w-3.5" />
-                  WhatsApp
+                  {whatsappPreparingId === invoice.id
+                    ? "מכין..."
+                    : whatsappReadyShare?.invoiceId === invoice.id
+                    ? "שליחה"
+                    : "WhatsApp"}
                 </button>
                 {invoice.status !== DocumentStatus.CANCELLED &&
                   invoice.documentType !== DocumentType.CREDIT_NOTE &&
