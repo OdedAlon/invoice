@@ -69,6 +69,10 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
     notesHe: "",
     lines: [{ ...emptyInvoiceLine }]
   });
+  // Tracks whether the user has actually edited the invoice form, as opposed
+  // to it merely holding the auto-filled default customer (see loadData) —
+  // only genuine edits should trigger the "unsaved changes" tab-switch guard.
+  const [invoiceFormTouched, setInvoiceFormTouched] = useState(false);
   const [loading, setLoading] = useState(true);
   const [savingCustomer, setSavingCustomer] = useState(false);
   const [editingCustomerId, setEditingCustomerId] = useState<string | null>(null);
@@ -139,9 +143,9 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
   // ── Auto-save draft form to localStorage ─────────────────────
   const LS_KEY = "invoice-form-autosave";
   useEffect(() => {
-    if (!invoiceForm.customerId && invoiceForm.lines.every((l) => !l.descriptionHe)) return;
+    if (!invoiceFormTouched) return;
     try { localStorage.setItem(LS_KEY, JSON.stringify({ form: invoiceForm, tab: selectedTab })); } catch { /* ignore */ }
-  }, [invoiceForm, selectedTab]);
+  }, [invoiceForm, invoiceFormTouched, selectedTab]);
   useEffect(() => {
     try {
       const saved = localStorage.getItem(LS_KEY);
@@ -149,6 +153,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
       const { form, tab } = JSON.parse(saved) as { form: typeof invoiceForm; tab: WorkspaceTab };
       if (form.customerId || form.lines.some((l: { descriptionHe: string }) => l.descriptionHe)) {
         setInvoiceForm(form);
+        setInvoiceFormTouched(true);
         setSelectedTab(tab);
       }
     } catch { /* ignore */ }
@@ -553,8 +558,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
               ) : null}
               <button
                 onClick={async () => {
-                  const formHasContent = invoiceForm.customerId || invoiceForm.lines.some((l) => l.descriptionHe);
-                  if (formHasContent && tab !== selectedTab && !editingDraftId) {
+                  if (invoiceFormTouched && tab !== selectedTab && !editingDraftId) {
                     const ok = await confirmAction("יש נתונים לא שמורים בטופס. לעבור לטאב בלי לשמור?");
                     if (!ok) return;
                   }
@@ -576,7 +580,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
         </nav>
 
         {/* Incomplete business settings banner */}
-        {!loading && !settingsBannerDismissed && !businessSettings.nameHe ? (
+        {!loading && !settingsBannerDismissed && (!businessSettings.nameHe || !businessSettings.taxId || !businessSettings.addressHe) ? (
           <div className="mx-4 mb-4 flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm sm:mx-6">
             <span className="text-amber-800">⚠️ טרם הוגדרו פרטי העסק — מלאו שם עסק, מספר עוסק וכתובת כדי שיופיעו על המסמכים.</span>
             <div className="flex shrink-0 gap-2">
@@ -663,6 +667,7 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
                 setSelectedTab={setSelectedTab}
                 invoiceForm={invoiceForm}
                 setInvoiceForm={setInvoiceForm}
+                setInvoiceFormTouched={setInvoiceFormTouched}
                 editingDraftId={editingDraftId}
                 setEditingDraftId={setEditingDraftId}
                 receiptPaymentForm={receiptPaymentForm}

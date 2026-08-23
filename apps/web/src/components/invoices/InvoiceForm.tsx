@@ -25,6 +25,7 @@ import { AmountTile } from "@/components/common/AmountTile";
 export function InvoiceForm({
   invoiceForm,
   setInvoiceForm,
+  setInvoiceFormTouched,
   editingDraftId,
   setEditingDraftId,
   receiptPaymentForm,
@@ -42,6 +43,7 @@ export function InvoiceForm({
 }: {
   invoiceForm: CreateDraftInvoiceInput;
   setInvoiceForm: Dispatch<SetStateAction<CreateDraftInvoiceInput>>;
+  setInvoiceFormTouched: Dispatch<SetStateAction<boolean>>;
   editingDraftId: string | null;
   setEditingDraftId: Dispatch<SetStateAction<string | null>>;
   receiptPaymentForm: ReceiptPaymentFormState;
@@ -75,10 +77,12 @@ export function InvoiceForm({
   const totals = useMemo(() => calculateDraftInvoice(invoiceForm.lines), [invoiceForm.lines]);
 
   function updateInvoiceField<Key extends keyof CreateDraftInvoiceInput>(key: Key, value: CreateDraftInvoiceInput[Key]) {
+    setInvoiceFormTouched(true);
     setInvoiceForm((current) => ({ ...current, [key]: value }));
   }
 
   function updateInvoiceLine(index: number, key: keyof DraftInvoiceLineInput, value: string) {
+    setInvoiceFormTouched(true);
     setInvoiceForm((current) => ({
       ...current,
       lines: current.lines.map((line, lineIndex) => {
@@ -102,6 +106,7 @@ export function InvoiceForm({
   }
 
   function addInvoiceLine() {
+    setInvoiceFormTouched(true);
     setInvoiceForm((current) => ({
       ...current,
       lines: [...current.lines, { ...emptyInvoiceLine, vatRate: isPtur ? 0 : 17 }]
@@ -109,6 +114,7 @@ export function InvoiceForm({
   }
 
   function removeInvoiceLine(index: number) {
+    setInvoiceFormTouched(true);
     setInvoiceForm((current) => ({
       ...current,
       lines: current.lines.filter((_, lineIndex) => lineIndex !== index)
@@ -139,6 +145,7 @@ export function InvoiceForm({
 
       await apiPost("/v1/invoices/drafts", payload, "שמירת הטיוטה נכשלה");
 
+      setInvoiceFormTouched(false);
       setInvoiceForm((current) => ({
         ...current,
         customerId: "",
@@ -179,6 +186,7 @@ export function InvoiceForm({
       await apiPatch(`/v1/invoices/drafts/${editingDraftId}`, payload, "עדכון הטיוטה נכשל");
 
       setEditingDraftId(null);
+      setInvoiceFormTouched(false);
       setInvoiceForm((current) => ({
         ...current,
         customerId: "",
@@ -203,7 +211,7 @@ export function InvoiceForm({
       {editingDraftId ? (
         <div className="mb-3 flex items-center justify-between rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-700 border border-amber-200">
           <span>עורכים טיוטה קיימת</span>
-          <button type="button" className="text-xs underline" onClick={() => { setEditingDraftId(null); setInvoiceForm((c) => ({ ...c, customerId: "", issueDate: today, dueDate: today, notesHe: "", lines: [{ ...emptyInvoiceLine, vatRate: isPtur ? 0 : 17 }] })); }}>ביטול עריכה</button>
+          <button type="button" className="text-xs underline" onClick={() => { setEditingDraftId(null); setInvoiceFormTouched(false); setInvoiceForm((c) => ({ ...c, customerId: "", issueDate: today, dueDate: today, notesHe: "", lines: [{ ...emptyInvoiceLine, vatRate: isPtur ? 0 : 17 }] })); }}>ביטול עריכה</button>
         </div>
       ) : null}
       <form id="invoice-form-panel" className="grid gap-5" onSubmit={editingDraftId ? handleUpdateDraft : handleInvoiceSubmit}>
@@ -217,6 +225,7 @@ export function InvoiceForm({
                 onChange={(e) => {
                   const tpl = templates.find((t) => t.name === e.target.value);
                   if (tpl) {
+                    setInvoiceFormTouched(true);
                     setInvoiceForm((f) => ({ ...tpl.form, documentType: f.documentType, issueDate: today, dueDate: today }));
                     toast("התבנית נטענה", "success");
                   }
@@ -518,6 +527,7 @@ export function InvoiceForm({
                   onChange={(event) => {
                     const val = event.target.value;
                     const match = serviceItems.find((s) => s.name === val);
+                    setInvoiceFormTouched(true);
                     setInvoiceForm((current) => ({
                       ...current,
                       lines: current.lines.map((l, li) =>

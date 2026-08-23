@@ -13,6 +13,7 @@ export function InvoiceWorkspace({
   setSelectedTab,
   invoiceForm,
   setInvoiceForm,
+  setInvoiceFormTouched,
   editingDraftId,
   setEditingDraftId,
   receiptPaymentForm,
@@ -58,6 +59,7 @@ export function InvoiceWorkspace({
   setSelectedTab: (tab: WorkspaceTab) => void;
   invoiceForm: CreateDraftInvoiceInput;
   setInvoiceForm: Dispatch<SetStateAction<CreateDraftInvoiceInput>>;
+  setInvoiceFormTouched: Dispatch<SetStateAction<boolean>>;
   editingDraftId: string | null;
   setEditingDraftId: Dispatch<SetStateAction<string | null>>;
   receiptPaymentForm: ReceiptPaymentFormState;
@@ -124,6 +126,7 @@ export function InvoiceWorkspace({
         <InvoiceForm
           invoiceForm={invoiceForm}
           setInvoiceForm={setInvoiceForm}
+          setInvoiceFormTouched={setInvoiceFormTouched}
           editingDraftId={editingDraftId}
           setEditingDraftId={setEditingDraftId}
           receiptPaymentForm={receiptPaymentForm}

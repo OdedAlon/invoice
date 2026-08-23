@@ -652,10 +652,16 @@ export async function getBusinessSettings(userId: string) {
     }
   }
 
+  // New businesses get an auto-generated "NEW-..." placeholder taxId (see
+  // getOrCreateBusinessForUser) purely to satisfy the DB's uniqueness
+  // constraint before the owner has set a real one. Present it as unset
+  // rather than as if it were real data the user forgot they'd entered.
+  const hasRealTaxId = !business.taxId.startsWith("NEW-");
+
   return {
     nameHe: business.nameHe,
     detailsHe: business.detailsHe ?? undefined,
-    taxId: business.taxId,
+    taxId: hasRealTaxId ? business.taxId : "",
     taxProfile: business.taxProfile as BusinessTaxProfile,
     addressHe: business.addressHe ?? undefined,
     phone: business.phone ?? undefined,
