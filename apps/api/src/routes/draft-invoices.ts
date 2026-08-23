@@ -4,19 +4,27 @@ import { DocumentType, PaymentMethod, getDocumentTypeLabel } from "@invoice/shar
 import { createCreditNote, createReturnNote, createDraftInvoice, getInvoiceForExport, issueDraftInvoice, listCustomers, listDraftInvoices, listIssuedInvoices } from "../data/prisma-store.js";
 import { buildInvoiceHtml } from "../lib/invoice-html.js";
 import { prisma } from "@invoice/db";
-import puppeteer, { type Browser } from "puppeteer";
+import puppeteerCore, { type Browser } from "puppeteer-core";
+import chromium from "@sparticuz/chromium";
 
 let _browser: Browser | null = null;
 async function getBrowser(): Promise<Browser> {
   if (_browser && _browser.connected) return _browser;
-  // Render runs this as a normal persistent container (not AWS Lambda), so
-  // puppeteer's own bundled Chromium works fine in production too — no need
-  // for the Lambda-oriented puppeteer-core + @sparticuz/chromium combo,
-  // which was solving a filesystem/size constraint this deployment doesn't
-  // have while still shipping a second Chromium binary alongside this one.
-  _browser = await puppeteer.launch({
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-  });
+  const isProd = process.env.NODE_ENV === "production";
+  if (isProd) {
+    const executablePath = await chromium.executablePath();
+    _browser = await puppeteerCore.launch({
+      executablePath,
+      args: chromium.args,
+      headless: true,
+    });
+  } else {
+    // Local dev: use system Chrome or puppeteer's bundled one
+    const localPuppeteer = await import("puppeteer");
+    _browser = await localPuppeteer.default.launch({
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+    }) as unknown as Browser;
+  }
   return _browser;
 }
 
