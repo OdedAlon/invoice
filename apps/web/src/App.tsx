@@ -1,7 +1,7 @@
 import { useEffect, Fragment, useMemo, useState, useCallback } from "react";
 import type { FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Building2, FilePlus2, Moon, ReceiptText, Search, Sun, X, Users } from "lucide-react";
+import { Building2, FilePlus2, LogOut, Moon, ReceiptText, Search, Sun, X, Users } from "lucide-react";
 import {
   BusinessTaxProfile,
   DocumentType,
@@ -496,9 +496,9 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
             </div>
 
             <div className="grid grid-cols-3 gap-2 md:gap-3">
-              <StatCard icon={<Users className="h-5 w-5" />} label="לקוחות פעילים" value={String(customers.length)} />
-              <StatCard icon={<FilePlus2 className="h-5 w-5" />} label="סה״כ טיוטות" value={String(draftInvoices.length)} />
-              <StatCard icon={<ReceiptText className="h-5 w-5" />} label="סה״כ מסמכים שהונפקו" value={String(issuedInvoices.length)} />
+              <StatCard icon={<Users className="h-5 w-5" />} label="לקוחות פעילים" value={loading ? "—" : String(customers.length)} />
+              <StatCard icon={<FilePlus2 className="h-5 w-5" />} label="סה״כ טיוטות" value={loading ? "—" : String(draftInvoices.length)} />
+              <StatCard icon={<ReceiptText className="h-5 w-5" />} label="סה״כ מסמכים שהונפקו" value={loading ? "—" : String(issuedInvoices.length)} />
             </div>
           </div>
           <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
@@ -520,14 +520,6 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
               <span className="hidden text-sm font-medium sm:inline">הגדרות משתמש</span>
             </button>
             <button
-              className="flex items-center gap-1.5 rounded-xl border border-rose-400/50 bg-rose-500/20 p-2 text-rose-200 hover:bg-rose-500/30 sm:px-3 sm:py-1.5"
-              onClick={onLogout}
-              aria-label="יציאה"
-            >
-              <X className="h-4 w-4" />
-              <span className="hidden text-sm font-medium sm:inline">יציאה</span>
-            </button>
-            <button
               className="flex items-center gap-1.5 rounded-xl border border-white/20 px-2 py-2 text-white hover:bg-white/10"
               onClick={() => { setGlobalSearchOpen(true); setGlobalSearchQuery(""); }}
               aria-label="חיפוש גלובלי (Ctrl+K)"
@@ -542,6 +534,15 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
               aria-label={darkMode ? "עבור למצב בהיר" : "עבור למצב כהה"}
             >
               {darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            </button>
+            <div className="mx-1 h-6 w-px shrink-0 bg-white/20" />
+            <button
+              className="flex items-center gap-1.5 rounded-xl border border-rose-400/50 bg-rose-500/20 p-2 text-rose-200 hover:bg-rose-500/30 sm:px-3 sm:py-1.5"
+              onClick={onLogout}
+              aria-label="יציאה"
+            >
+              <LogOut className="h-4 w-4" />
+              <span className="hidden text-sm font-medium sm:inline">יציאה</span>
             </button>
           </div>
         </header>
