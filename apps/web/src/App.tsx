@@ -549,7 +549,11 @@ function App({ user, onLogout }: { user: { displayName: string; email: string };
 
         {/* Document Type Tabs */}
         <nav className="sticky top-0 z-20 mb-6 flex gap-0 overflow-x-auto border-b border-slate-200 bg-white px-4 py-0 dark:border-slate-700 dark:bg-slate-900 sm:px-6">
-          {(isPtur
+          {/* While loading, businessSettings still holds its MURSHE-profile
+              default, so isPtur can't be trusted yet — show the tab set
+              common to both profiles rather than briefly flashing tabs a
+              PTUR business shouldn't have. */}
+          {(loading || isPtur
             ? [DocumentType.RECEIPT, DocumentType.PROFORMA, DocumentType.RETURN_NOTE, "REPORTS"] as WorkspaceTab[]
             : [DocumentType.TAX_INVOICE, DocumentType.RECEIPT, DocumentType.INVOICE_RECEIPT, DocumentType.PROFORMA, DocumentType.RETURN_NOTE, "QUOTE", "REPORTS"] as WorkspaceTab[]
           ).map((tab) => (
