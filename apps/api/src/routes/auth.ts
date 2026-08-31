@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import bcrypt from "bcryptjs";
 import { createHash, randomBytes } from "node:crypto";
 import { prisma } from "@invoice/db";
-import nodemailer from "nodemailer";
+import { getMailTransporter, getMailFromAddress } from "../lib/mail.js";
 
 const BCRYPT_ROUNDS = 12;
 const JWT_EXPIRY = "8h";
@@ -183,23 +183,13 @@ export async function registerAuthRoutes(app: FastifyInstance) {
         const appUrl = process.env.APP_URL ?? "http://localhost:5173";
         const resetLink = `${appUrl}?reset_token=${rawToken}`;
 
-        const gmailUser = process.env.GMAIL_USER;
-        const gmailPass = process.env.GMAIL_APP_PASSWORD;
-      
-        if (!gmailUser || !gmailPass) {
-          app.log.warn("GMAIL_USER or GMAIL_APP_PASSWORD not set — email sending disabled");
+        const transporter = getMailTransporter();
+        const gmailUser = getMailFromAddress();
+
+        if (!transporter || !gmailUser) {
+          app.log.warn("Gmail OAuth2 credentials not set — email sending disabled");
           return;
         }
-      
-        const transporter = nodemailer.createTransport({
-          host: "smtp.gmail.com",
-          port: 587,
-          secure: false, // STARTTLS
-          auth: {
-            user: gmailUser,
-            pass: gmailPass, // Gmail App Password (not your account password)
-          },
-        });
 
         try {
         await transporter.sendMail({

@@ -1,9 +1,9 @@
 import type { FastifyInstance } from "fastify";
-import nodemailer from "nodemailer";
 import { getInvoiceForExport } from "../data/prisma-store.js";
 import { buildEmailHtml } from "../lib/invoice-html.js";
 import { getDocumentTypeLabel } from "@invoice/shared";
 import { DocumentType } from "@invoice/shared";
+import { getMailTransporter, getMailFromAddress } from "../lib/mail.js";
 
 function getUserId(request: { user: unknown }): string {
   return (request.user as { sub: string }).sub;
@@ -13,23 +13,13 @@ type SendEmailParams = { id: string };
 type SendEmailBody = { to?: string };
 
 export async function registerSendEmailRoutes(app: FastifyInstance) {
-  const gmailUser = process.env.GMAIL_USER;
-  const gmailPass = process.env.GMAIL_APP_PASSWORD;
+  const transporter = getMailTransporter();
+  const gmailUser = getMailFromAddress();
 
-  if (!gmailUser || !gmailPass) {
-    app.log.warn("GMAIL_USER or GMAIL_APP_PASSWORD not set — email sending disabled");
+  if (!transporter || !gmailUser) {
+    app.log.warn("Gmail OAuth2 credentials not set — email sending disabled");
     return;
   }
-
-  const transporter = nodemailer.createTransport({
-    host: "smtp.gmail.com",
-    port: 587,
-    secure: false, // STARTTLS
-    auth: {
-      user: gmailUser,
-      pass: gmailPass, // Gmail App Password (not your account password)
-    },
-  });
 
   app.post<{ Params: SendEmailParams; Body: SendEmailBody }>(
     "/v1/invoices/:id/send-email",
